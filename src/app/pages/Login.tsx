@@ -82,28 +82,18 @@ export default function Login() {
     e.preventDefault();
     setEmpError('');
     setEmpLoading(true);
-    try {
-      const ok = await login(empUser.trim(), empPass);
-      if (!ok) setEmpError('Credenciales incorrectas. Verifica usuario y contraseña.');
-    } catch (error) {
-      setEmpError('Error de conexión. Intente nuevamente.');
-    } finally {
-      setEmpLoading(false);
-    }
+    const result = await login(empUser.trim(), empPass);
+    if (!result.ok) setEmpError(result.error ?? 'Credenciales incorrectas. Verifica usuario y contraseña.');
+    setEmpLoading(false);
   };
 
   const handleClienteLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setCliError('');
     setCliLoading(true);
-    try {
-      const ok = await login(cliUser.trim(), cliPass);
-      if (!ok) setCliError('Usuario o contraseña incorrectos.');
-    } catch (error) {
-      setCliError('Error de conexión. Intente nuevamente.');
-    } finally {
-      setCliLoading(false);
-    }
+    const result = await login(cliUser.trim(), cliPass);
+    if (!result.ok) setCliError(result.error ?? 'Usuario o contraseña incorrectos.');
+    setCliLoading(false);
   };
 
   const handleRegistro = async (e: React.FormEvent) => {

@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router';
 import {
   LayoutDashboard, Users, Car, ClipboardList, Wrench,
   Package, Settings, LogOut, Menu, X, CalendarDays,
-  Building2, ShieldCheck, BarChart3, UserCog, Bell, Receipt, Kanban, BookOpen, Layers
+  Building2, ShieldCheck, BarChart3, UserCog, Bell, Receipt, History, Layers
 } from 'lucide-react';
 import { useApp, Rol } from '../context/AppContext';
 import logoImg from 'figma:asset/705ae0af64042a0b0fa15a9246b41db08254ad91.png';
@@ -35,6 +35,7 @@ const navSections: NavSection[] = [
       { label: 'Clientes', path: '/clientes', icon: <Users size={16} />, roles: ['asesor'] },
       { label: 'Vehículos', path: '/vehiculos', icon: <Car size={16} />, roles: ['asesor'] },
       { label: 'Órdenes de Trabajo', path: '/ordenes', icon: <ClipboardList size={16} />, roles: ['asesor', 'jefe_taller'] },
+      { label: 'Trazabilidad', path: '/trazabilidad', icon: <History size={16} />, roles: ['asesor', 'administrador', 'jefe_taller'] },
     ],
   },
   {
@@ -49,6 +50,8 @@ const navSections: NavSection[] = [
     title: 'Portal del Cliente',
     items: [
       { label: 'Inicio', path: '/portal', icon: <Car size={16} />, roles: ['cliente'] },
+      { label: 'Mis Citas', path: '/citas', icon: <CalendarDays size={16} />, roles: ['cliente'] },
+      { label: 'Historial del Vehículo', path: '/trazabilidad', icon: <History size={16} />, roles: ['cliente'] },
       { label: 'Mis Facturas', path: '/facturas', icon: <Receipt size={16} />, roles: ['cliente'] },
     ],
   },
@@ -59,11 +62,8 @@ const navSections: NavSection[] = [
       { label: 'Inventario', path: '/inventario', icon: <Package size={16} />, roles: ['administrador'] },
       { label: 'Facturas', path: '/facturas', icon: <Receipt size={16} />, roles: ['administrador'] },
       { label: 'Reportes', path: '/reportes', icon: <BarChart3 size={16} />, roles: ['administrador'] },
-      { label: 'Historias Usuario', path: '/historias-usuario', icon: <Kanban size={16} />, roles: ['administrador'] },
-      { label: 'Planificación Jira', path: '/jira-planning', icon: <BookOpen size={16} />, roles: ['administrador'] },
-      { label: 'Documentación', path: '/documentacion', icon: <BookOpen size={16} />, roles: ['administrador'] },
-      { label: 'Arquitectura', path: '/arquitectura', icon: <Layers size={16} />, roles: ['administrador'] },
       { label: 'Configuración', path: '/configuracion', icon: <Settings size={16} />, roles: ['administrador'] },
+      { label: 'Arquitectura', path: '/arquitectura', icon: <Layers size={16} />, roles: ['administrador'] },
     ],
   },
   {

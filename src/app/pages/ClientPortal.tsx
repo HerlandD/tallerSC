@@ -177,13 +177,26 @@ function ModalAgendarCita({ vehiculos, clienteId, onClose }: {
   const horarios = ['08:00','08:30','09:00','09:30','10:00','10:30','11:00','11:30','14:00','14:30','15:00','15:30','16:00','16:30'];
   const today = new Date().toISOString().split('T')[0];
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!form.vehiculoId || !form.tipoServicio || !form.fecha || !form.motivoIngreso) {
       toast.error('Completa todos los campos requeridos'); return;
     }
-    addCita({ clienteId, vehiculoId:form.vehiculoId, tipoServicio:form.tipoServicio, motivoIngreso:form.motivoIngreso, fecha:form.fecha, hora:form.hora, estado:'pendiente', notas:form.notas });
-    toast.success('✅ Solicitud de cita enviada. El taller la confirmará pronto.');
-    onClose();
+    const result = await addCita({
+      clienteId:     clienteId,
+      vehiculoId:    form.vehiculoId,
+      tipoServicio:  form.tipoServicio,
+      motivoIngreso: form.motivoIngreso,
+      fecha:         form.fecha,
+      hora:          form.hora,
+      estado:        'pendiente',
+      notas:         form.notas,
+    });
+    if (result.ok) {
+      toast.success('✅ Solicitud de cita enviada. El taller la confirmará pronto.');
+      onClose();
+    } else {
+      toast.error(result.error ?? 'Error al enviar la solicitud');
+    }
   };
 
   return (

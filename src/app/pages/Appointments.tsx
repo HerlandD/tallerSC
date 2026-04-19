@@ -2,9 +2,8 @@ import React, { useState, useRef } from 'react';
 import {
   Plus, Search, CalendarDays, X, Clock, CheckCircle, XCircle,
   Pencil, ArrowRight, Bell, Car, User, FileText,
-  ClipboardList, AlertTriangle, ChevronRight, Send, Camera,
-  Fuel, Droplet, Disc, Package, ChevronLeft, MapPin, Image,
-  CheckSquare
+  ClipboardList, Send, Camera, AlertCircle, Loader2,
+  Fuel, Droplet, Disc, Package, ChevronLeft, CheckSquare
 } from 'lucide-react';
 import { useApp, Cita, EstadoCita, RecepcionVehiculo } from '../context/AppContext';
 import { toast } from 'sonner';
@@ -71,7 +70,7 @@ function ModalRecepcionCita({
   const [paso, setPaso] = useState<1 | 2 | 3 | 4>(1);
 
   // Recepcion form
-  const [km, setKm] = useState(veh?.kilometraje || '');
+  const [km, setKm] = useState(veh?.kilometraje ? String(veh.kilometraje) : '');
   const [combustible, setCombustible] = useState(3); // 0-5 scale
   const [aceite, setAceite] = useState<'bueno' | 'bajo' | 'malo'>('bueno');
   const [refrigerante, setRefrigerante] = useState<'bueno' | 'bajo' | 'malo'>('bueno');
@@ -418,6 +417,7 @@ export default function Appointments() {
   const {
     citas, clientes, vehiculos, catalogs,
     addCita, updateCita, deleteCita,
+    confirmarCita, reprogramarCita, cancelarCita,
     addOrden, addNotificacion, currentUser, ordenes
   } = useApp();
 
@@ -444,7 +444,20 @@ export default function Appointments() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [recepcionCita, setRecepcionCita] = useState<Cita | null>(null); // full reception wizard
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [submitLoading, setSubmitLoading] = useState(false);
+  const [serverError, setServerError] = useState('');
+  const [recepcionCita, setRecepcionCita] = useState<Cita | null>(null);
+
+  // ── Reprogramar modal ─────────────────────────────────────
+  const [reprogramarModal, setReprogramarModal] = useState<{ id: string; fecha: string; hora: string } | null>(null);
+  const [reprogramarLoading, setReprogramarLoading] = useState(false);
+  const [reprogramarError, setReprogramarError] = useState('');
+
+  // ── Cancelar con motivo modal ─────────────────────────────
+  const [cancelModal, setCancelModal] = useState<string | null>(null); // citaId
+  const [cancelMotivo, setCancelMotivo] = useState('');
+  const [cancelLoading, setCancelLoading] = useState(false);
 
   type FormData = Omit<Cita, 'id' | 'ordenId'>;
   const emptyForm: FormData = {
@@ -479,6 +492,7 @@ export default function Appointments() {
     setEditId(null);
     setForm({ ...emptyForm, fecha: today });
     setErrors({});
+    setServerError('');
     setModalOpen(true);
   };
 
@@ -486,16 +500,20 @@ export default function Appointments() {
     setEditId(c.id);
     setForm({ clienteId: c.clienteId, vehiculoId: c.vehiculoId, tipoServicio: c.tipoServicio, motivoIngreso: c.motivoIngreso, fecha: c.fecha, hora: c.hora, estado: c.estado, notas: c.notas });
     setErrors({});
+    setServerError('');
     setModalOpen(true);
   };
 
   const validate = (): boolean => {
     const e: Record<string, string> = {};
-    if (!form.clienteId) e.clienteId = 'Selecciona un cliente';
-    if (!form.vehiculoId) e.vehiculoId = 'Selecciona un vehículo';
-    if (!form.tipoServicio) e.tipoServicio = 'Selecciona el tipo de servicio';
-    if (!form.motivoIngreso) e.motivoIngreso = 'Selecciona el motivo';
+    if (!isCliente) {
+      if (!form.clienteId)    e.clienteId    = 'Selecciona un cliente';
+      if (!form.vehiculoId)   e.vehiculoId   = 'Selecciona un vehículo';
+      if (!form.tipoServicio) e.tipoServicio  = 'Selecciona el tipo de servicio';
+      if (!form.motivoIngreso)e.motivoIngreso = 'Selecciona el motivo';
+    }
     if (!form.fecha) e.fecha = 'Selecciona una fecha';
+    if (!form.notas?.trim() && isCliente) e.notas = 'Describe el motivo o falla de tu vehículo';
     if (form.fecha && form.hora && !editId) {
       const overlap = citas.find(c => c.fecha === form.fecha && c.hora === form.hora && c.estado !== 'cancelada');
       if (overlap) e.hora = 'Esa franja horaria ya está ocupada';
@@ -504,27 +522,47 @@ export default function Appointments() {
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!validate()) return;
+    setSubmitLoading(true);
+    setServerError('');
+
+    let result: { ok: boolean; error?: string };
+
     if (editId) {
-      updateCita(editId, form);
-      toast.success('Cita actualizada');
+      result = await updateCita(editId, form);
+      if (result.ok) toast.success('Cita actualizada');
     } else {
-      addCita(form);
-      if (isCliente) {
-        const veh = vehiculos.find(v => v.id === form.vehiculoId);
-        addNotificacion({
-          tipo: 'nueva_cita',
-          titulo: 'Nueva solicitud de cita',
-          mensaje: `${currentUser?.nombre} solicita cita de "${form.tipoServicio}" para ${veh?.placa} el ${form.fecha} a las ${form.hora}`,
-          paraRol: ['asesor', 'administrador'],
-        });
-        toast.success('✅ ¡Cita solicitada! El asesor recibirá tu solicitud.');
-      } else {
-        toast.success('Cita registrada correctamente');
+      const citaData = isCliente
+        ? {
+            ...form,
+            clienteId:     clienteActual?.id || form.clienteId,
+            vehiculoId:    misVehiculos[0]?.id || '',
+            tipoServicio:  'Por confirmar',
+            motivoIngreso: form.notas || 'Por confirmar',
+          }
+        : form;
+
+      result = await addCita(citaData);
+
+      if (result.ok) {
+        if (isCliente) {
+          addNotificacion({
+            tipo: 'nueva_cita',
+            titulo: 'Nueva solicitud de cita',
+            mensaje: `${currentUser?.nombre} solicita cita el ${form.fecha} a las ${form.hora}. Motivo: ${form.notas}`,
+            paraRol: ['asesor', 'administrador'],
+          });
+          toast.success('✅ ¡Cita solicitada! El asesor la recibirá pronto.');
+        } else {
+          toast.success('Cita registrada correctamente');
+        }
       }
     }
+
+    setSubmitLoading(false);
+    if (!result.ok) { setServerError(result.error ?? 'Error desconocido'); return; }
     setModalOpen(false);
   };
 
@@ -534,7 +572,7 @@ export default function Appointments() {
   };
 
   // After wizard: create OT with reception data → directly to en_diagnostico
-  const handleCrearOTDesdeRecepcion = (recepcion: RecepcionVehiculo, descripcion: string, fotos: string[]) => {
+  const handleCrearOTDesdeRecepcion = async (recepcion: RecepcionVehiculo, descripcion: string, fotos: string[]) => {
     const cli = clientes.find(c => c.id === recepcionCita!.clienteId);
     const veh = vehiculos.find(v => v.id === recepcionCita!.vehiculoId);
     addOrden({
@@ -547,7 +585,7 @@ export default function Appointments() {
       recepcion: { ...recepcion, fotos },
       fotosRecepcion: fotos,
     });
-    updateCita(recepcionCita!.id, { estado: 'en_progreso' });
+    await updateCita(recepcionCita!.id, { estado: 'en_progreso' });
     addNotificacion({
       tipo: 'nueva_cita',
       titulo: 'Vehículo recibido — OT abierta y lista para diagnóstico',
@@ -744,7 +782,7 @@ export default function Appointments() {
                   </div>
                   <div className="flex flex-col gap-2 items-end flex-shrink-0">
                     {['pendiente', 'confirmada'].includes(c.estado) && (
-                      <button onClick={() => { updateCita(c.id, { estado: 'cancelada' }); toast.success('Cita cancelada'); }}
+                      <button onClick={async () => { const r = await cancelarCita(c.id); r.ok ? toast.success('Cita cancelada') : toast.error(r.error ?? 'Error al cancelar'); }}
                         className="text-xs text-red-500 hover:bg-red-50 px-2 py-1 rounded-lg border border-red-200">
                         Cancelar
                       </button>
@@ -819,25 +857,42 @@ export default function Appointments() {
                       </td>
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-1 justify-end flex-wrap">
-                          {/* PRINCIPAL: Recibir vehículo → crea OT con recepción completa */}
+                          {/* Confirmar — solo para pendientes */}
+                          {canManage && c.estado === 'pendiente' && (
+                            <button onClick={async () => {
+                              const r = await confirmarCita(c.id);
+                              r.ok ? toast.success('Cita confirmada') : toast.error(r.error ?? 'Error al confirmar');
+                            }}
+                              className="flex items-center gap-1 px-2.5 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold">
+                              <CheckCircle size={12} /> Confirmar
+                            </button>
+                          )}
+                          {/* Reprogramar — pendiente o confirmada */}
+                          {canManage && ['pendiente', 'confirmada'].includes(c.estado) && (
+                            <button onClick={() => { setReprogramarModal({ id: c.id, fecha: c.fecha, hora: c.hora }); setReprogramarError(''); }}
+                              className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg" title="Reprogramar">
+                              <CalendarDays size={14} />
+                            </button>
+                          )}
+                          {/* Recibir vehículo → crea OT */}
                           {puedeRecibir && (
                             <button onClick={() => handleAbrirRecepcion(c)}
                               className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-slate-800 text-white hover:bg-slate-700 rounded-lg font-bold shadow-sm">
-                              <Car size={12} /> Recibir vehículo
+                              <Car size={12} /> Recibir
                             </button>
                           )}
-                          {/* Edit */}
+                          {/* Editar */}
                           {canManage && !['completada', 'cancelada', 'en_progreso'].includes(c.estado) && (
-                            <button onClick={() => openEdit(c)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Pencil size={14} /></button>
+                            <button onClick={() => openEdit(c)} className="p-1.5 text-gray-400 hover:text-slate-700 hover:bg-slate-50 rounded-lg" title="Editar"><Pencil size={14} /></button>
                           )}
-                          {/* Cancel */}
+                          {/* Cancelar con motivo */}
                           {canManage && !['completada', 'cancelada', 'en_progreso'].includes(c.estado) && (
-                            <button onClick={() => { updateCita(c.id, { estado: 'cancelada' }); toast.success('Cita cancelada'); }}
-                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg"><XCircle size={14} /></button>
+                            <button onClick={() => { setCancelModal(c.id); setCancelMotivo(''); }}
+                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Cancelar"><XCircle size={14} /></button>
                           )}
-                          {/* Delete */}
+                          {/* Eliminar */}
                           {canManage && (
-                            <button onClick={() => setDeleteConfirm(c.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
+                            <button onClick={() => setDeleteConfirm(c.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Eliminar">
                               <X size={14} />
                             </button>
                           )}
@@ -865,113 +920,155 @@ export default function Appointments() {
             </div>
 
             <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
-              {canManage && (
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Cliente *</label>
-                  <select value={form.clienteId} onChange={e => setForm({ ...form, clienteId: e.target.value, vehiculoId: '' })} className={inCls(errors.clienteId)}>
-                    <option value="">Seleccionar cliente...</option>
-                    {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre} — CI: {c.ci}</option>)}
-                  </select>
-                  {errors.clienteId && <p className="text-xs text-red-500 mt-1">{errors.clienteId}</p>}
-                </div>
-              )}
-              {isCliente && clienteActual && (
-                <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-2.5 flex items-center gap-2">
-                  <User size={14} className="text-blue-600" />
-                  <span className="text-sm font-medium text-blue-800">{clienteActual.nombre}</span>
-                </div>
-              )}
 
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Vehículo *</label>
-                {isCliente ? (
-                  misVehiculos.length === 0 ? (
-                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-700">
-                      <p className="font-semibold mb-1">Sin vehículos registrados</p>
-                      <p className="text-xs text-blue-600">El asesor lo registrará al abrir la OT.</p>
+              {/* ── Formulario simplificado para CLIENTE ── */}
+              {isCliente ? (
+                <>
+                  {/* Info del cliente */}
+                  {clienteActual && (
+                    <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-2.5 flex items-center gap-2">
+                      <User size={14} className="text-blue-600" />
+                      <span className="text-sm font-medium text-blue-800">{clienteActual.nombre}</span>
                     </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {misVehiculos.map(v => (
-                        <button key={v.id} type="button" onClick={() => setForm({ ...form, vehiculoId: v.id })}
-                          className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all ${form.vehiculoId === v.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                          <Car size={16} className={form.vehiculoId === v.id ? 'text-blue-600' : 'text-gray-400'} />
-                          <div>
-                            <p className="text-sm font-semibold text-gray-800">{v.placa}</p>
-                            <p className="text-xs text-gray-500">{v.marca} {v.modelo} {v.año} · {v.color}</p>
-                          </div>
-                          {form.vehiculoId === v.id && <CheckCircle size={16} className="text-blue-600 ml-auto flex-shrink-0" />}
-                        </button>
-                      ))}
+                  )}
+
+                  {/* Fecha + Hora */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1.5">Fecha *</label>
+                      <input type="date" value={form.fecha}
+                        onChange={e => setForm({ ...form, fecha: e.target.value })}
+                        min={today} className={inCls(errors.fecha)} />
+                      {errors.fecha && <p className="text-xs text-red-500 mt-1">{errors.fecha}</p>}
                     </div>
-                  )
-                ) : (
-                  <select value={form.vehiculoId} onChange={e => setForm({ ...form, vehiculoId: e.target.value })}
-                    disabled={!form.clienteId} className={inCls(errors.vehiculoId)}>
-                    <option value="">{form.clienteId ? 'Seleccionar vehículo...' : 'Primero selecciona un cliente'}</option>
-                    {clienteVehiculos.map(v => <option key={v.id} value={v.id}>{v.placa} — {v.marca} {v.modelo} ({v.año})</option>)}
-                  </select>
-                )}
-                {errors.vehiculoId && <p className="text-xs text-red-500 mt-1">{errors.vehiculoId}</p>}
-              </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1.5">Hora *</label>
+                      <select value={form.hora}
+                        onChange={e => setForm({ ...form, hora: e.target.value })}
+                        className={inCls(errors.hora)}>
+                        {HORAS.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                      {errors.hora && <p className="text-xs text-red-500 mt-1">{errors.hora}</p>}
+                    </div>
+                  </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Tipo de Servicio *</label>
-                  <select value={form.tipoServicio} onChange={e => setForm({ ...form, tipoServicio: e.target.value })} className={inCls(errors.tipoServicio)}>
-                    <option value="">Seleccionar...</option>
-                    {catalogs.tiposServicio.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                  {errors.tipoServicio && <p className="text-xs text-red-500 mt-1">{errors.tipoServicio}</p>}
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Motivo de Ingreso *</label>
-                  <select value={form.motivoIngreso} onChange={e => setForm({ ...form, motivoIngreso: e.target.value })} className={inCls(errors.motivoIngreso)}>
-                    <option value="">Seleccionar...</option>
-                    {catalogs.motivosIngreso.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                  {errors.motivoIngreso && <p className="text-xs text-red-500 mt-1">{errors.motivoIngreso}</p>}
-                </div>
-              </div>
+                  {/* Motivo / Falla reportada */}
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                      Motivo / Falla reportada *
+                    </label>
+                    <textarea value={form.notas}
+                      onChange={e => setForm({ ...form, notas: e.target.value })}
+                      rows={4}
+                      placeholder="Describe el problema de tu vehículo: síntomas, ruidos, fallas, desde cuándo..."
+                      className={`w-full px-3.5 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 resize-none transition-colors ${errors.notas ? 'border-red-400 focus:ring-red-300' : 'border-gray-300 focus:ring-blue-500'}`} />
+                    {errors.notas && <p className="text-xs text-red-500 mt-1">{errors.notas}</p>}
+                  </div>
+                </>
+              ) : (
+                /* ── Formulario completo para ASESOR / ADMIN ── */
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">Cliente *</label>
+                    <select value={form.clienteId}
+                      onChange={e => setForm({ ...form, clienteId: e.target.value, vehiculoId: '' })}
+                      className={inCls(errors.clienteId)}>
+                      <option value="">Seleccionar cliente...</option>
+                      {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre} — CI: {c.ci}</option>)}
+                    </select>
+                    {errors.clienteId && <p className="text-xs text-red-500 mt-1">{errors.clienteId}</p>}
+                  </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Fecha *</label>
-                  <input type="date" value={form.fecha} onChange={e => setForm({ ...form, fecha: e.target.value })} min={today} className={inCls(errors.fecha)} />
-                  {errors.fecha && <p className="text-xs text-red-500 mt-1">{errors.fecha}</p>}
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Hora *</label>
-                  <select value={form.hora} onChange={e => setForm({ ...form, hora: e.target.value })} className={inCls(errors.hora)}>
-                    {HORAS.map(h => <option key={h} value={h}>{h}</option>)}
-                  </select>
-                  {errors.hora && <p className="text-xs text-red-500 mt-1">{errors.hora}</p>}
-                </div>
-              </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">Vehículo *</label>
+                    <select value={form.vehiculoId}
+                      onChange={e => setForm({ ...form, vehiculoId: e.target.value })}
+                      disabled={!form.clienteId} className={inCls(errors.vehiculoId)}>
+                      <option value="">{form.clienteId ? 'Seleccionar vehículo...' : 'Primero selecciona un cliente'}</option>
+                      {clienteVehiculos.map(v => <option key={v.id} value={v.id}>{v.placa} — {v.marca} {v.modelo} ({v.año})</option>)}
+                    </select>
+                    {errors.vehiculoId && <p className="text-xs text-red-500 mt-1">{errors.vehiculoId}</p>}
+                  </div>
 
-              {editId && canManage && (
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Estado</label>
-                  <select value={form.estado} onChange={e => setForm({ ...form, estado: e.target.value as EstadoCita })} className={inCls()}>
-                    {Object.entries(estadoCitaConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                  </select>
-                </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1.5">Tipo de Servicio *</label>
+                      <select value={form.tipoServicio}
+                        onChange={e => setForm({ ...form, tipoServicio: e.target.value })}
+                        className={inCls(errors.tipoServicio)}>
+                        <option value="">Seleccionar...</option>
+                        {catalogs.tiposServicio.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                      {errors.tipoServicio && <p className="text-xs text-red-500 mt-1">{errors.tipoServicio}</p>}
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1.5">Motivo de Ingreso *</label>
+                      <select value={form.motivoIngreso}
+                        onChange={e => setForm({ ...form, motivoIngreso: e.target.value })}
+                        className={inCls(errors.motivoIngreso)}>
+                        <option value="">Seleccionar...</option>
+                        {catalogs.motivosIngreso.map(m => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                      {errors.motivoIngreso && <p className="text-xs text-red-500 mt-1">{errors.motivoIngreso}</p>}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1.5">Fecha *</label>
+                      <input type="date" value={form.fecha}
+                        onChange={e => setForm({ ...form, fecha: e.target.value })}
+                        min={today} className={inCls(errors.fecha)} />
+                      {errors.fecha && <p className="text-xs text-red-500 mt-1">{errors.fecha}</p>}
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1.5">Hora *</label>
+                      <select value={form.hora}
+                        onChange={e => setForm({ ...form, hora: e.target.value })}
+                        className={inCls(errors.hora)}>
+                        {HORAS.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                      {errors.hora && <p className="text-xs text-red-500 mt-1">{errors.hora}</p>}
+                    </div>
+                  </div>
+
+                  {editId && (
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1.5">Estado</label>
+                      <select value={form.estado}
+                        onChange={e => setForm({ ...form, estado: e.target.value as EstadoCita })}
+                        className={inCls()}>
+                        {Object.entries(estadoCitaConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                      </select>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">Notas adicionales</label>
+                    <textarea value={form.notas}
+                      onChange={e => setForm({ ...form, notas: e.target.value })}
+                      rows={3}
+                      placeholder="Observaciones adicionales..."
+                      className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+                  </div>
+                </>
               )}
 
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Descripción del problema / Notas</label>
-                <textarea value={form.notas} onChange={e => setForm({ ...form, notas: e.target.value })} rows={3}
-                  placeholder={isCliente ? 'Describe el problema de tu vehículo, síntomas, ruidos...' : 'Observaciones adicionales...'}
-                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
-              </div>
+              {serverError && (
+                <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-3 py-2.5 text-sm">
+                  <AlertCircle size={15} className="flex-shrink-0 mt-0.5" />
+                  <span>{serverError}</span>
+                </div>
+              )}
 
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setModalOpen(false)}
                   className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
                   Cancelar
                 </button>
-                <button type="submit"
-                  className="flex-1 px-4 py-2.5 bg-slate-800 text-white rounded-xl text-sm hover:bg-slate-700 font-semibold flex items-center justify-center gap-2">
+                <button type="submit" disabled={submitLoading}
+                  className="flex-1 px-4 py-2.5 bg-slate-800 text-white rounded-xl text-sm hover:bg-slate-700 disabled:opacity-60 font-semibold flex items-center justify-center gap-2">
+                  {submitLoading && <Loader2 size={14} className="animate-spin" />}
                   {isCliente && !editId ? <><Send size={14} /> Enviar Solicitud</> : editId ? 'Actualizar' : 'Registrar Cita'}
                 </button>
               </div>
@@ -997,8 +1094,128 @@ export default function Appointments() {
             <p className="text-gray-600 text-sm mb-5">¿Estás seguro de que deseas eliminar esta cita permanentemente?</p>
             <div className="flex gap-3">
               <button onClick={() => setDeleteConfirm(null)} className="flex-1 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-700 hover:bg-gray-50">Cancelar</button>
-              <button onClick={() => { deleteCita(deleteConfirm); setDeleteConfirm(null); toast.success('Cita eliminada'); }}
-                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700">Eliminar</button>
+              <button disabled={deleteLoading} onClick={async () => { setDeleteLoading(true); const r = await deleteCita(deleteConfirm!); setDeleteLoading(false); if (r.ok) { setDeleteConfirm(null); toast.success('Cita eliminada'); } else toast.error(r.error ?? 'Error al eliminar'); }}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 disabled:opacity-60 flex items-center justify-center gap-2">
+                {deleteLoading && <Loader2 size={14} className="animate-spin" />}
+                Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reprogramar modal ── */}
+      {reprogramarModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-gray-800">Reprogramar Cita</h3>
+              <button onClick={() => setReprogramarModal(null)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                <X size={15} className="text-gray-500" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Nueva Fecha *</label>
+                <input
+                  type="date"
+                  value={reprogramarModal.fecha}
+                  min={today}
+                  onChange={e => setReprogramarModal({ ...reprogramarModal, fecha: e.target.value })}
+                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Nueva Hora *</label>
+                <select
+                  value={reprogramarModal.hora}
+                  onChange={e => setReprogramarModal({ ...reprogramarModal, hora: e.target.value })}
+                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {HORAS.map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+              </div>
+              {reprogramarError && (
+                <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-3 py-2.5 text-sm">
+                  <AlertCircle size={15} className="flex-shrink-0 mt-0.5" />
+                  <span>{reprogramarError}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setReprogramarModal(null)}
+                className="flex-1 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-700 hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                disabled={reprogramarLoading}
+                onClick={async () => {
+                  setReprogramarLoading(true);
+                  setReprogramarError('');
+                  const r = await reprogramarCita(reprogramarModal.id, reprogramarModal.fecha, reprogramarModal.hora);
+                  setReprogramarLoading(false);
+                  if (r.ok) {
+                    setReprogramarModal(null);
+                    toast.success('Cita reprogramada');
+                  } else {
+                    setReprogramarError(r.error ?? 'Error al reprogramar');
+                  }
+                }}
+                className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm hover:bg-blue-700 disabled:opacity-60 flex items-center justify-center gap-2 font-semibold">
+                {reprogramarLoading && <Loader2 size={14} className="animate-spin" />}
+                <CalendarDays size={14} /> Reprogramar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cancelar con motivo modal ── */}
+      {cancelModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-gray-800">Cancelar Cita</h3>
+              <button onClick={() => setCancelModal(null)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                <X size={15} className="text-gray-500" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">¿Estás seguro de que deseas cancelar esta cita?</p>
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                Motivo de cancelación <span className="text-gray-400 font-normal">(opcional)</span>
+              </label>
+              <textarea
+                value={cancelMotivo}
+                onChange={e => setCancelMotivo(e.target.value)}
+                rows={3}
+                placeholder="Indica el motivo de la cancelación..."
+                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              />
+            </div>
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setCancelModal(null)}
+                className="flex-1 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-700 hover:bg-gray-50">
+                Volver
+              </button>
+              <button
+                disabled={cancelLoading}
+                onClick={async () => {
+                  setCancelLoading(true);
+                  const r = await cancelarCita(cancelModal, cancelMotivo || undefined);
+                  setCancelLoading(false);
+                  if (r.ok) {
+                    setCancelModal(null);
+                    setCancelMotivo('');
+                    toast.success('Cita cancelada');
+                  } else {
+                    toast.error(r.error ?? 'Error al cancelar');
+                  }
+                }}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 disabled:opacity-60 flex items-center justify-center gap-2 font-semibold">
+                {cancelLoading && <Loader2 size={14} className="animate-spin" />}
+                <XCircle size={14} /> Cancelar cita
+              </button>
             </div>
           </div>
         </div>

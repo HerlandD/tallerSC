@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 
   # Functional requirements review
 
@@ -9,3 +10,7 @@
 
   Run `npm run dev` to start the development server.
   
+=======
+# tallerSC
+App Web para la automatizacion del uso de un taller mecanico.
+>>>>>>> be9669e96fd36a77ff1d494fe9e4cacd7b0b383c

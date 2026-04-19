@@ -17,6 +17,7 @@ import SystemDocs from './pages/SystemDocs';
 import UserStoryBoard from './pages/UserStoryBoard';
 import ArquitecturaDocs from './pages/ArquitecturaDocs';
 import ModeloDatos from './pages/ModeloDatos';
+import Trazabilidad from './pages/Trazabilidad';
 
 export const router = createBrowserRouter([
   {
@@ -43,6 +44,7 @@ export const router = createBrowserRouter([
       { path: 'documentacion', Component: SystemDocs },
       { path: 'arquitectura', Component: ArquitecturaDocs },
       { path: 'modelo-datos', Component: ModeloDatos },
+      { path: 'trazabilidad', Component: Trazabilidad },
     ],
   },
 ]);

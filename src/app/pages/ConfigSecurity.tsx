@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Settings, Plus, Pencil, Trash2, X, Eye, EyeOff, Users, UserCheck, BookOpen, ChevronDown, ChevronUp } from 'lucide-react';
+import { Settings, Plus, Pencil, Trash2, X, Eye, EyeOff, Users, UserCheck, BookOpen, ChevronDown, ChevronUp, UserX, UserCheck2, Search } from 'lucide-react';
 import { useApp, PersonalTaller, Usuario, Rol, Catalogs } from '../context/AppContext';
 import { toast } from 'sonner';
 
@@ -209,13 +209,25 @@ type UsuarioForm = Omit<Usuario, 'id'>;
 const emptyUsuario: UsuarioForm = { nombre: '', username: '', password: '', rol: 'asesor', activo: true };
 
 function UsuariosTab() {
-  const { usuarios, addUsuario, updateUsuario, deleteUsuario, currentUser } = useApp();
+  const { usuarios, addUsuario, updateUsuario, currentUser } = useApp();
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<UsuarioForm>(emptyUsuario);
   const [errors, setErrors] = useState<Partial<Record<keyof UsuarioForm, string>>>({});
   const [showPass, setShowPass] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [desactivarConfirm, setDesactivarConfirm] = useState<string | null>(null);
+
+  // ── CA-9: Filtros por rol y estado ────────────────────────
+  const [filterRol, setFilterRol]       = useState<string>('');
+  const [filterEstado, setFilterEstado] = useState<string>('');
+  const [search, setSearch]             = useState('');
+
+  const usuariosFiltrados = usuarios.filter(u => {
+    const matchRol    = !filterRol    || u.rol === filterRol;
+    const matchEstado = !filterEstado || (filterEstado === 'activo' ? u.activo : !u.activo);
+    const matchSearch = !search       || u.nombre.toLowerCase().includes(search.toLowerCase()) || u.username.toLowerCase().includes(search.toLowerCase());
+    return matchRol && matchEstado && matchSearch;
+  });
 
   const openCreate = () => { setEditId(null); setForm(emptyUsuario); setErrors({}); setShowPass(false); setModalOpen(true); };
   const openEdit = (u: Usuario) => { setEditId(u.id); setForm({ nombre: u.nombre, username: u.username, password: u.password, rol: u.rol, activo: u.activo }); setErrors({}); setShowPass(false); setModalOpen(true); };
@@ -224,38 +236,101 @@ function UsuariosTab() {
     const e: Partial<Record<keyof UsuarioForm, string>> = {};
     if (!form.nombre.trim()) e.nombre = 'Nombre requerido';
     if (!form.username.trim()) e.username = 'Usuario requerido';
-    if (!form.password || form.password.length < 4) e.password = 'Mínimo 4 caracteres';
+    if (!editId && (!form.password || form.password.length < 4)) e.password = 'Mínimo 4 caracteres';
     const dup = usuarios.find(u => u.username === form.username && u.id !== editId);
     if (dup) e.username = 'Usuario ya existe';
     setErrors(e); return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
-    if (editId) { updateUsuario(editId, form); toast.success('Usuario actualizado'); }
-    else { addUsuario(form); toast.success('Usuario creado'); }
-    setModalOpen(false);
+    setSaving(true);
+    if (editId) {
+      const r = await updateUsuario(editId, form);
+      setSaving(false);
+      if (r.ok) { toast.success('Usuario actualizado'); setModalOpen(false); }
+      else toast.error(r.error ?? 'Error al actualizar');
+    } else {
+      const r = await addUsuario(form);
+      setSaving(false);
+      if (r.ok) { toast.success('Usuario creado'); setModalOpen(false); }
+      else toast.error(r.error ?? 'Error al crear');
+    }
   };
 
-  const rolCounts = rolOptions.reduce((acc, r) => {
-    acc[r.value] = usuarios.filter(u => u.rol === r.value).length;
-    return acc;
-  }, {} as Record<Rol, number>);
+  // ── CA-7: Desactivación lógica ────────────────────────────
+  const handleToggleActivo = async (u: Usuario) => {
+    if (u.activo) {
+      setDesactivarConfirm(u.id);
+    } else {
+      const r = await updateUsuario(u.id, { activo: true });
+      if (r.ok) toast.success(`${u.nombre} reactivado`);
+      else toast.error(r.error ?? 'Error al reactivar');
+    }
+  };
+
+  const confirmarDesactivar = async (id: string) => {
+    const u = usuarios.find(x => x.id === id);
+    const r = await updateUsuario(id, { activo: false });
+    setDesactivarConfirm(null);
+    if (r.ok) toast.success(`${u?.nombre ?? 'Usuario'} desactivado`);
+    else toast.error(r.error ?? 'Error al desactivar');
+  };
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex gap-2 flex-wrap">
-          {rolOptions.map(r => (
-            <div key={r.value} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ${r.color}`}>
-              {r.label} <span className="opacity-60">({rolCounts[r.value] || 0})</span>
-            </div>
-          ))}
+      {/* Barra de filtros — CA-9 */}
+      <div className="flex flex-wrap gap-3 mb-4 items-center justify-between">
+        <div className="flex flex-wrap gap-2 flex-1">
+          {/* Búsqueda */}
+          <div className="relative min-w-48">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text" value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar nombre o usuario..."
+              className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          {/* Filtro por rol */}
+          <select value={filterRol} onChange={e => setFilterRol(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+            <option value="">Todos los roles</option>
+            {rolOptions.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
+          {/* Filtro por estado */}
+          <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+            <option value="">Activos e Inactivos</option>
+            <option value="activo">Solo Activos</option>
+            <option value="inactivo">Solo Inactivos</option>
+          </select>
+          {(filterRol || filterEstado || search) && (
+            <button onClick={() => { setFilterRol(''); setFilterEstado(''); setSearch(''); }}
+              className="px-3 py-2 text-gray-500 hover:text-gray-700 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
+              Limpiar
+            </button>
+          )}
         </div>
-        <button onClick={openCreate} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ml-3 flex-shrink-0">
+        <button onClick={openCreate} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors flex-shrink-0">
           <Plus size={16} /> Nuevo Usuario
         </button>
+      </div>
+
+      {/* Resumen rápido */}
+      <div className="flex gap-2 flex-wrap mb-4">
+        {rolOptions.map(r => {
+          const n = usuarios.filter(u => u.rol === r.value).length;
+          if (!n) return null;
+          return (
+            <button key={r.value} onClick={() => setFilterRol(filterRol === r.value ? '' : r.value)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${filterRol === r.value ? `${r.color} border-current` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}>
+              {r.label} <span className="opacity-60">({n})</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -263,18 +338,22 @@ function UsuariosTab() {
           <table className="w-full">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                {['Nombre', 'Usuario', 'Rol', 'Estado', ''].map(h => <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>)}
+                {['Nombre', 'Usuario', 'Rol', 'Estado', 'Acciones'].map(h => (
+                  <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {usuarios.map(u => {
+              {usuariosFiltrados.length === 0 ? (
+                <tr><td colSpan={5} className="py-10 text-center text-sm text-gray-400">No se encontraron usuarios con los filtros aplicados</td></tr>
+              ) : usuariosFiltrados.map(u => {
                 const rolCfg = rolOptions.find(r => r.value === u.rol)!;
                 const isSelf = u.id === currentUser?.id;
                 return (
-                  <tr key={u.id} className={`hover:bg-gray-50 transition-colors ${isSelf ? 'bg-blue-50/30' : ''}`}>
+                  <tr key={u.id} className={`hover:bg-gray-50 transition-colors ${!u.activo ? 'opacity-60' : ''} ${isSelf ? 'bg-blue-50/30' : ''}`}>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold text-gray-600">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold ${u.activo ? 'bg-gray-100 text-gray-600' : 'bg-gray-50 text-gray-400'}`}>
                           {u.nombre.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
                         </div>
                         <div>
@@ -284,7 +363,9 @@ function UsuariosTab() {
                       </div>
                     </td>
                     <td className="px-5 py-3.5 text-sm text-gray-500 font-mono">{u.username}</td>
-                    <td className="px-5 py-3.5"><span className={`text-xs px-2.5 py-1 rounded-full font-medium ${rolCfg.color}`}>{rolCfg.label}</span></td>
+                    <td className="px-5 py-3.5">
+                      <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${rolCfg.color}`}>{rolCfg.label}</span>
+                    </td>
                     <td className="px-5 py-3.5">
                       <span className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium ${u.activo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${u.activo ? 'bg-green-500' : 'bg-gray-400'}`} />
@@ -293,8 +374,19 @@ function UsuariosTab() {
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-1 justify-end">
-                        <button onClick={() => openEdit(u)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Pencil size={14} /></button>
-                        {!isSelf && <button onClick={() => setDeleteConfirm(u.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={14} /></button>}
+                        <button onClick={() => openEdit(u)} title="Editar"
+                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                          <Pencil size={14} />
+                        </button>
+                        {/* CA-7: Desactivación lógica — NO eliminación física */}
+                        {!isSelf && (
+                          <button
+                            onClick={() => handleToggleActivo(u)}
+                            title={u.activo ? 'Desactivar usuario' : 'Reactivar usuario'}
+                            className={`p-1.5 rounded-lg transition-colors ${u.activo ? 'text-gray-400 hover:text-amber-600 hover:bg-amber-50' : 'text-gray-400 hover:text-green-600 hover:bg-green-50'}`}>
+                            {u.activo ? <UserX size={14} /> : <UserCheck2 size={14} />}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -305,6 +397,7 @@ function UsuariosTab() {
         </div>
       </div>
 
+      {/* Modal crear/editar */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
@@ -325,9 +418,11 @@ function UsuariosTab() {
                   {errors.username && <p className="text-xs text-red-500 mt-1">{errors.username}</p>}
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-700 mb-1.5">Contraseña</label>
+                  <label className="block text-sm text-gray-700 mb-1.5">
+                    Contraseña {editId && <span className="text-gray-400 font-normal">(dejar vacío = no cambiar)</span>}
+                  </label>
                   <div className="relative">
-                    <input type={showPass ? 'text' : 'password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="Min. 4 car." className={`${inputCls(errors.password)} pr-9`} />
+                    <input type={showPass ? 'text' : 'password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder={editId ? '••••••' : 'Mín. 4 car.'} className={`${inputCls(errors.password)} pr-9`} />
                     <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">{showPass ? <EyeOff size={14} /> : <Eye size={14} />}</button>
                   </div>
                   {errors.password && <p className="text-xs text-red-500 mt-1">{errors.password}</p>}
@@ -345,13 +440,44 @@ function UsuariosTab() {
               </label>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setModalOpen(false)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition-colors">Cancelar</button>
-                <button type="submit" className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors">{editId ? 'Actualizar' : 'Crear'}</button>
+                <button type="submit" disabled={saving} className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors disabled:opacity-60">{saving ? 'Guardando…' : editId ? 'Actualizar' : 'Crear'}</button>
               </div>
             </form>
           </div>
         </div>
       )}
-      {deleteConfirm && <DeleteConfirm onConfirm={() => { deleteUsuario(deleteConfirm); setDeleteConfirm(null); toast.success('Usuario eliminado'); }} onCancel={() => setDeleteConfirm(null)} />}
+
+      {/* Modal confirmación desactivación — CA-7 */}
+      {desactivarConfirm && (() => {
+        const u = usuarios.find(x => x.id === desactivarConfirm);
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <UserX size={18} className="text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-800">Desactivar usuario</h3>
+                  <p className="text-xs text-gray-500">{u?.nombre}</p>
+                </div>
+              </div>
+              <p className="text-sm text-gray-600 mb-1">El usuario quedará <strong>Inactivo</strong> y no podrá iniciar sesión.</p>
+              <p className="text-xs text-gray-400 mb-5">El registro se conserva íntegramente — no hay eliminación física.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setDesactivarConfirm(null)}
+                  className="flex-1 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-700 hover:bg-gray-50">
+                  Cancelar
+                </button>
+                <button onClick={() => confirmarDesactivar(desactivarConfirm)}
+                  className="flex-1 py-2.5 bg-amber-500 text-white rounded-xl text-sm hover:bg-amber-600 font-semibold">
+                  Desactivar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

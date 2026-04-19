@@ -43,7 +43,7 @@ export interface Cliente {
 
 export interface Vehiculo {
   id: string; clienteId: string; placa: string; marca: string; modelo: string;
-  año: number; color: string; chasis?: string; kilometraje?: string;
+  año: number; color: string; chasis?: string; kilometraje?: number;
   creadoPor?: string; fechaCreacion?: string;
 }
 
@@ -213,7 +213,7 @@ const initialCatalogs: Catalogs = {
 
 interface AppContextType {
   currentUser: Usuario | null;
-  login: (username: string, password: string) => Promise<boolean>;
+  login: (username: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => void;
   registerCliente: (datos: {
     nombre: string; ci: string; nit?: string; telefono: string; email: string;
@@ -233,25 +233,28 @@ interface AppContextType {
   catalogs: Catalogs;
   facturas: Factura[];
 
-  addUsuario: (u: Omit<Usuario, 'id'>) => void;
-  updateUsuario: (id: string, u: Partial<Usuario>) => void;
+  addUsuario: (u: Omit<Usuario, 'id'>) => Promise<{ ok: boolean; error?: string }>;
+  updateUsuario: (id: string, u: Partial<Usuario>) => Promise<{ ok: boolean; error?: string }>;
   deleteUsuario: (id: string) => void;
 
   addPersonal: (p: Omit<PersonalTaller, 'id'>) => void;
   updatePersonal: (id: string, p: Partial<PersonalTaller>) => void;
   deletePersonal: (id: string) => void;
 
-  addCliente: (c: Omit<Cliente, 'id' | 'fechaRegistro'>) => void;
-  updateCliente: (id: string, c: Partial<Cliente>) => void;
-  deleteCliente: (id: string) => void;
+  addCliente: (c: Omit<Cliente, 'id' | 'fechaRegistro'>) => Promise<{ ok: boolean; error?: string }>;
+  updateCliente: (id: string, c: Partial<Cliente>) => Promise<{ ok: boolean; error?: string }>;
+  deleteCliente: (id: string) => Promise<{ ok: boolean; error?: string }>;
 
-  addVehiculo: (v: Omit<Vehiculo, 'id'>) => void;
-  updateVehiculo: (id: string, v: Partial<Vehiculo>) => void;
-  deleteVehiculo: (id: string) => void;
+  addVehiculo: (v: Omit<Vehiculo, 'id'>) => Promise<{ ok: boolean; error?: string }>;
+  updateVehiculo: (id: string, v: Partial<Vehiculo>) => Promise<{ ok: boolean; error?: string }>;
+  deleteVehiculo: (id: string) => Promise<{ ok: boolean; error?: string }>;
 
-  addCita: (c: Omit<Cita, 'id'>) => void;
-  updateCita: (id: string, c: Partial<Cita>) => void;
-  deleteCita: (id: string) => void;
+  addCita:       (c: Omit<Cita, 'id'>) => Promise<{ ok: boolean; error?: string }>;
+  updateCita:    (id: string, c: Partial<Cita>) => Promise<{ ok: boolean; error?: string }>;
+  deleteCita:    (id: string) => Promise<{ ok: boolean; error?: string }>;
+  confirmarCita: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  reprogramarCita: (id: string, fecha: string, hora: string) => Promise<{ ok: boolean; error?: string }>;
+  cancelarCita:  (id: string, motivo?: string) => Promise<{ ok: boolean; error?: string }>;
 
   addProveedor: (p: Omit<Proveedor, 'id'>) => void;
   updateProveedor: (id: string, p: Partial<Proveedor>) => void;
@@ -283,6 +286,8 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | null>(null);
 
+const SESSION_KEY = 'tallerpro_session';
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUser] = useState<Usuario | null>(null);
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
@@ -299,9 +304,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [facturas, setFacturas] = useState<Factura[]>([]);
   const [notificaciones, setNotificaciones] = useState<Notificacion[]>([]);
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  // Restaurar sesión guardada al montar la app
+  useEffect(() => {
+    const saved = localStorage.getItem(SESSION_KEY);
+    if (!saved) return;
     try {
-      // Llamada al RPC server-side (SECURITY DEFINER — bypasea RLS, mapea roles)
+      const parsed = JSON.parse(saved) as Usuario;
+      if (parsed?.id && parsed?.rol) setCurrentUser(parsed);
+    } catch {
+      localStorage.removeItem(SESSION_KEY);
+    }
+  }, []);
+
+  const login = async (username: string, password: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
       const { data, error } = await supabase.rpc('login_usuario', {
         p_username: username,
         p_password: password,
@@ -309,26 +325,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       if (!error && data?.success && data?.user) {
         const user = rpcUserToUsuario(data.user as RpcUser);
+        localStorage.setItem(SESSION_KEY, JSON.stringify(user));
         setCurrentUser(user);
         addAuditoria({ fecha: new Date().toISOString(), usuarioId: user.id, usuarioNombre: user.nombre, accion: 'LOGIN', modulo: 'Sistema', detalles: `Inicio de sesión — Rol: ${user.rol}` });
-        return true;
+        return { ok: true };
       }
 
-      // Si el RPC existe pero las credenciales son incorrectas, no hacer fallback
-      if (!error && data && !data.success) return false;
+      // RPC respondió pero con error de credenciales — devolver mensaje exacto del servidor
+      if (!error && data && !data.success) {
+        return { ok: false, error: data.error ?? 'Credenciales incorrectas' };
+      }
 
-      // Fallback a datos locales solo cuando el RPC falla (no está creado aún en Supabase)
+      // Fallback local (solo si el RPC aún no está en Supabase)
       console.warn('RPC login_usuario no disponible, usando datos locales:', error?.message);
       const localUser = usuarios.find(u => u.username === username && u.password === password && u.activo);
       if (localUser) {
+        localStorage.setItem(SESSION_KEY, JSON.stringify(localUser));
         setCurrentUser(localUser);
         addAuditoria({ fecha: new Date().toISOString(), usuarioId: localUser.id, usuarioNombre: localUser.nombre, accion: 'LOGIN', modulo: 'Sistema', detalles: `Inicio de sesión (local) — Rol: ${localUser.rol}` });
-        return true;
+        return { ok: true };
       }
-      return false;
+      return { ok: false, error: 'Credenciales incorrectas' };
     } catch (err) {
       console.error('Error en login:', err);
-      return false;
+      return { ok: false, error: 'Error de conexión. Intenta nuevamente.' };
     }
   };
 
@@ -359,6 +379,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
 
       const user = rpcUserToUsuario(data.user as RpcUser);
+      localStorage.setItem(SESSION_KEY, JSON.stringify(user));
       setUsuarios(prev => [...prev, user]);
       setCurrentUser(user);
       addAuditoria({
@@ -379,29 +400,309 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (currentUser) {
       addAuditoria({ fecha: new Date().toISOString(), usuarioId: currentUser.id, usuarioNombre: currentUser.nombre, accion: 'LOGOUT', modulo: 'Sistema', detalles: 'Cierre de sesión' });
     }
+    localStorage.removeItem('tallerpro_session');
     setCurrentUser(null);
   };
 
-  const addUsuario = (u: Omit<Usuario, 'id'>) => setUsuarios(p => [...p, { ...u, id: `u${Date.now()}` }]);
-  const updateUsuario = (id: string, u: Partial<Usuario>) => setUsuarios(p => p.map(x => x.id === id ? { ...x, ...u } : x));
+  // Cargar datos desde Supabase cada vez que haya un usuario activo
+  useEffect(() => {
+    if (!currentUser) { setClientes([]); setVehiculos([]); setCitas([]); setUsuarios([]); return; }
+
+    // Administradores y jefes de taller cargan la lista de usuarios
+    if (currentUser.rol === 'administrador' || currentUser.rol === 'jefe_taller') {
+      supabase.rpc('listar_usuarios').then(({ data }) => {
+        if (Array.isArray(data)) setUsuarios(data as Usuario[]);
+      });
+    }
+
+    supabase.rpc('listar_clientes').then(({ data }) => {
+      if (Array.isArray(data)) setClientes(data as Cliente[]);
+    });
+    supabase.rpc('listar_vehiculos').then(({ data }) => {
+      if (Array.isArray(data)) {
+        setVehiculos((data as any[]).map(v => ({ ...v, año: v.anio })));
+      }
+    });
+    supabase.rpc('listar_citas', {
+      p_usuario_id: currentUser.id,
+      p_rol:        currentUser.rol,
+    }).then(({ data }) => {
+      if (Array.isArray(data)) setCitas(data as Cita[]);
+    });
+  }, [currentUser?.id]);
+
+  // ── Usuarios (Supabase RPC) ───────────────────────────────────────────────
+  const addUsuario = async (u: Omit<Usuario, 'id'>): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('crear_usuario', {
+        p_nombre:   u.nombre,
+        p_username: u.username,
+        p_password: u.password,
+        p_rol:      u.rol,
+        p_email:    u.email    ?? null,
+        p_telefono: u.telefono ?? null,
+        p_ci:       u.ci       ?? null,
+        p_activo:   u.activo,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al crear usuario' };
+      setUsuarios(prev => [...prev, data.usuario as Usuario]);
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  const updateUsuario = async (id: string, u: Partial<Usuario>): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const prev = usuarios.find(x => x.id === id);
+      if (!prev) return { ok: false, error: 'Usuario no encontrado' };
+      const merged = { ...prev, ...u };
+      const { data, error } = await supabase.rpc('actualizar_usuario', {
+        p_id:       id,
+        p_nombre:   merged.nombre,
+        p_username: merged.username,
+        p_password: u.password && u.password !== prev.password ? u.password : null,
+        p_rol:      merged.rol      ?? null,
+        p_email:    merged.email    ?? null,
+        p_telefono: merged.telefono ?? null,
+        p_ci:       merged.ci       ?? null,
+        p_activo:   merged.activo   ?? null,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al actualizar' };
+      setUsuarios(prev => prev.map(x => x.id === id ? { ...x, ...u } : x));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
   const deleteUsuario = (id: string) => setUsuarios(p => p.filter(x => x.id !== id));
 
   const addPersonal = (p: Omit<PersonalTaller, 'id'>) => setPersonal(prev => [...prev, { ...p, id: `p${Date.now()}` }]);
   const updatePersonal = (id: string, p: Partial<PersonalTaller>) => setPersonal(prev => prev.map(x => x.id === id ? { ...x, ...p } : x));
   const deletePersonal = (id: string) => setPersonal(prev => prev.filter(x => x.id !== id));
 
-  const addCliente = (c: Omit<Cliente, 'id' | 'fechaRegistro'>) =>
-    setClientes(p => [...p, { ...c, id: `c${Date.now()}`, fechaRegistro: new Date().toISOString().split('T')[0] }]);
-  const updateCliente = (id: string, c: Partial<Cliente>) => setClientes(p => p.map(x => x.id === id ? { ...x, ...c } : x));
-  const deleteCliente = (id: string) => setClientes(p => p.filter(x => x.id !== id));
+  // ── Clientes (Supabase RPC) ───────────────────────────────────────────────
+  const addCliente = async (c: Omit<Cliente, 'id' | 'fechaRegistro'>): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('crear_cliente', {
+        p_nombre:     c.nombre,
+        p_ci:         c.ci,
+        p_nit:        c.nit        ?? null,
+        p_telefono:   c.telefono,
+        p_email:      c.email      ?? null,
+        p_direccion:  c.direccion  ?? null,
+        p_usuario_id: c.usuarioId  ?? null,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al guardar' };
+      setClientes(prev => [...prev, data.cliente as Cliente]);
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
 
-  const addVehiculo = (v: Omit<Vehiculo, 'id'>) => setVehiculos(p => [...p, { ...v, id: `v${Date.now()}` }]);
-  const updateVehiculo = (id: string, v: Partial<Vehiculo>) => setVehiculos(p => p.map(x => x.id === id ? { ...x, ...v } : x));
-  const deleteVehiculo = (id: string) => setVehiculos(p => p.filter(x => x.id !== id));
+  const updateCliente = async (id: string, c: Partial<Cliente>): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const prev = clientes.find(x => x.id === id);
+      if (!prev) return { ok: false, error: 'Cliente no encontrado localmente' };
+      const merged = { ...prev, ...c };
+      const { data, error } = await supabase.rpc('actualizar_cliente', {
+        p_id:        id,
+        p_nombre:    merged.nombre,
+        p_ci:        merged.ci,
+        p_nit:       merged.nit       ?? null,
+        p_telefono:  merged.telefono,
+        p_email:     merged.email     ?? null,
+        p_direccion: merged.direccion ?? null,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al actualizar' };
+      setClientes(p => p.map(x => x.id === id ? { ...x, ...(data.cliente as Cliente) } : x));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
 
-  const addCita = (c: Omit<Cita, 'id'>) => setCitas(p => [...p, { ...c, id: `ct${Date.now()}` }]);
-  const updateCita = (id: string, c: Partial<Cita>) => setCitas(p => p.map(x => x.id === id ? { ...x, ...c } : x));
-  const deleteCita = (id: string) => setCitas(p => p.filter(x => x.id !== id));
+  const deleteCliente = async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('eliminar_cliente', { p_id: id });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al eliminar' };
+      setClientes(p => p.filter(x => x.id !== id));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  // ── Vehículos (Supabase RPC) ──────────────────────────────────────────────
+  const addVehiculo = async (v: Omit<Vehiculo, 'id'>): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('crear_vehiculo', {
+        p_cliente_id:  v.clienteId,
+        p_placa:       v.placa,
+        p_marca:       v.marca,
+        p_modelo:      v.modelo,
+        p_anio:        v.año,
+        p_color:       v.color       ?? null,
+        p_chasis:      v.chasis      ?? null,
+        p_kilometraje: v.kilometraje ?? 0,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al guardar' };
+      const veh: Vehiculo = { ...data.vehiculo, año: data.vehiculo.anio };
+      setVehiculos(prev => [...prev, veh]);
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  const updateVehiculo = async (id: string, v: Partial<Vehiculo>): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const prev = vehiculos.find(x => x.id === id);
+      if (!prev) return { ok: false, error: 'Vehículo no encontrado localmente' };
+      const merged = { ...prev, ...v };
+      const { data, error } = await supabase.rpc('actualizar_vehiculo', {
+        p_id:          id,
+        p_cliente_id:  merged.clienteId,
+        p_placa:       merged.placa,
+        p_marca:       merged.marca,
+        p_modelo:      merged.modelo,
+        p_anio:        merged.año,
+        p_color:       merged.color    ?? null,
+        p_chasis:      merged.chasis   ?? null,
+        p_kilometraje: merged.kilometraje ?? null,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al actualizar' };
+      const veh: Vehiculo = { ...data.vehiculo, año: data.vehiculo.anio };
+      setVehiculos(p => p.map(x => x.id === id ? veh : x));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  const deleteVehiculo = async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('eliminar_vehiculo', { p_id: id });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al eliminar' };
+      setVehiculos(p => p.filter(x => x.id !== id));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  // ── Citas (Supabase RPC) ──────────────────────────────────
+  const addCita = async (c: Omit<Cita, 'id'>): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('crear_cita', {
+        p_fecha:          c.fecha,
+        p_hora:           c.hora,
+        p_cliente_id:     c.clienteId  || null,
+        p_vehiculo_id:    c.vehiculoId || null,
+        p_tipo_servicio:  c.tipoServicio  || 'Por confirmar',
+        p_motivo_ingreso: c.motivoIngreso || null,
+        p_notas:          c.notas        || null,
+        p_estado:         c.estado       || 'pendiente',
+        p_creado_por:     currentUser?.id || null,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al guardar' };
+      setCitas(prev => [...prev, data.cita as Cita]);
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  const updateCita = async (id: string, c: Partial<Cita>): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('actualizar_cita', {
+        p_id:             id,
+        p_tipo_servicio:  c.tipoServicio  ?? null,
+        p_motivo_ingreso: c.motivoIngreso ?? null,
+        p_fecha:          c.fecha         ?? null,
+        p_hora:           c.hora          ?? null,
+        p_estado:         c.estado        ?? null,
+        p_notas:          c.notas         ?? null,
+        p_vehiculo_id:    c.vehiculoId    ?? null,
+        p_orden_id:       c.ordenId       ?? null,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al actualizar' };
+      setCitas(prev => prev.map(x => x.id === id ? { ...x, ...(data.cita as Cita) } : x));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  const deleteCita = async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('eliminar_cita', { p_id: id });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al eliminar' };
+      setCitas(prev => prev.filter(x => x.id !== id));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  const confirmarCita = async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('confirmar_cita', {
+        p_id:        id,
+        p_asesor_id: currentUser?.id ?? null,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al confirmar' };
+      setCitas(prev => prev.map(x => x.id === id ? { ...x, ...(data.cita as Cita) } : x));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  const reprogramarCita = async (id: string, fecha: string, hora: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('reprogramar_cita', {
+        p_id:          id,
+        p_nueva_fecha: fecha,
+        p_nueva_hora:  hora,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al reprogramar' };
+      setCitas(prev => prev.map(x => x.id === id ? { ...x, ...(data.cita as Cita) } : x));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
+
+  const cancelarCita = async (id: string, motivo?: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.rpc('cancelar_cita', {
+        p_id:     id,
+        p_motivo: motivo ?? null,
+      });
+      if (error) throw error;
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al cancelar' };
+      setCitas(prev => prev.map(x => x.id === id ? { ...x, ...(data.cita as Cita) } : x));
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'Error de conexión' };
+    }
+  };
 
   const addProveedor = (p: Omit<Proveedor, 'id'>) => setProveedores(prev => [...prev, { ...p, id: `pv${Date.now()}` }]);
   const updateProveedor = (id: string, p: Partial<Proveedor>) => setProveedores(prev => prev.map(x => x.id === id ? { ...x, ...p } : x));
@@ -523,7 +824,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addPersonal, updatePersonal, deletePersonal,
       addCliente, updateCliente, deleteCliente,
       addVehiculo, updateVehiculo, deleteVehiculo,
-      addCita, updateCita, deleteCita,
+      addCita, updateCita, deleteCita, confirmarCita, reprogramarCita, cancelarCita,
       addProveedor, updateProveedor, deleteProveedor,
       addOrden, updateOrden, deleteOrden,
       addRepuesto, updateRepuesto, deleteRepuesto,

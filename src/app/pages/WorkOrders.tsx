@@ -163,23 +163,34 @@ function WizardNuevaOT({ onClose }: { onClose: () => void }) {
   const vehiculosCliente = vehiculos.filter(v => v.clienteId === clienteId);
   const vehiculoSeleccionado = vehiculos.find(v => v.id === vehiculoId);
 
-  const handleRegistrarCliente = () => {
+  const handleRegistrarCliente = async () => {
     if (!nuevoCliente.nombre || !nuevoCliente.ci || !nuevoCliente.telefono) {
       toast.error('Nombre, CI y teléfono son requeridos'); return;
     }
-    addCliente({ ...nuevoCliente, nit: nuevoCliente.ci, creadoPor: currentUser?.id });
+    const result = await addCliente({ ...nuevoCliente, creadoPor: currentUser?.id });
+    if (!result.ok) { toast.error(result.error ?? 'Error al registrar cliente'); return; }
     setShowRegistrarCliente(false);
-    // Pre-fill search so user can see and click the new client on next render
     setClienteSearch(nuevoCliente.nombre);
     setClienteId('');
     toast.success(`Cliente ${nuevoCliente.nombre} registrado — selecciónalo de la lista`);
   };
 
-  const handleRegistrarVehiculo = () => {
+  const handleRegistrarVehiculo = async () => {
     if (!nuevoVehiculo.placa || !nuevoVehiculo.marca || !nuevoVehiculo.modelo) {
       toast.error('Placa, marca y modelo son requeridos'); return;
     }
-    addVehiculo({ ...nuevoVehiculo, clienteId, creadoPor: currentUser?.id, fechaCreacion: new Date().toISOString().split('T')[0] });
+    const result = await addVehiculo({
+      clienteId,
+      placa:        nuevoVehiculo.placa,
+      marca:        nuevoVehiculo.marca,
+      modelo:       nuevoVehiculo.modelo,
+      año:          nuevoVehiculo.año,
+      color:        nuevoVehiculo.color,
+      kilometraje:  Number(nuevoVehiculo.kilometraje) || 0,
+      creadoPor:    currentUser?.id,
+      fechaCreacion: new Date().toISOString().split('T')[0],
+    });
+    if (!result.ok) { toast.error(result.error ?? 'Error al registrar vehículo'); return; }
     setShowRegistrarVehiculo(false);
     setVehiculoId('');
     setNuevoVehiculo({ placa: '', marca: '', modelo: '', año: 2020, color: '', kilometraje: '' });
