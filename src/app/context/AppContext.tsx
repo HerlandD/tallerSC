@@ -16,7 +16,7 @@ export type EstadoOrden =
   | 'finalizada'
   | 'cancelada';
 
-export type EstadoCita = 'pendiente' | 'confirmada' | 'en_progreso' | 'completada' | 'cancelada';
+export type EstadoCita = 'pendiente' | 'confirmada' | 'en_progreso' | 'completada' | 'cancelada' | 'reprogramada';
 
 export interface Notificacion {
   id: string; fecha: string;
@@ -255,6 +255,7 @@ interface AppContextType {
   confirmarCita: (id: string) => Promise<{ ok: boolean; error?: string }>;
   reprogramarCita: (id: string, fecha: string, hora: string) => Promise<{ ok: boolean; error?: string }>;
   cancelarCita:  (id: string, motivo?: string) => Promise<{ ok: boolean; error?: string }>;
+  updateCitaEstado: (id: string, nuevoEstado: EstadoCita, motivo?: string) => Promise<{ ok: boolean; error?: string }>;
 
   addProveedor: (p: Omit<Proveedor, 'id'>) => void;
   updateProveedor: (id: string, p: Partial<Proveedor>) => void;
@@ -704,6 +705,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const updateCitaEstado = async (id: string, nuevoEstado: EstadoCita, motivo?: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      // Intentamos usar el RPC específico para cambio de estado (que maneja auditoría)
+      const { data, error } = await supabase.rpc('actualizar_cita_estado', {
+        p_cita_id: id,
+        p_nuevo_estado: nuevoEstado,
+        p_usuario_id: currentUser?.id,
+        p_motivo: motivo ?? null
+      });
+
+      if (error) {
+        // Fallback al update genérico si el RPC específico no existe todavía
+        console.warn('RPC actualizar_cita_estado no disponible, usando update genérico:', error.message);
+        return await updateCita(id, { estado: nuevoEstado, notas: motivo });
+      }
+
+      if (!data?.success) return { ok: false, error: data?.error ?? 'Error al cambiar estado' };
+
+      // Actualizar localmente
+      setCitas(prev => prev.map(c => c.id === id ? { ...c, estado: nuevoEstado, notas: motivo ?? c.notas } : c));
+      
+      // Registrar auditoría localmente también
+      addAuditoria({
+        fecha: new Date().toISOString(),
+        usuarioId: currentUser?.id ?? 'sistema',
+        usuarioNombre: currentUser?.nombre ?? 'Sistema',
+        accion: 'ACTUALIZAR_ESTADO_CITA',
+        modulo: 'Citas',
+        detalles: `Cita ${id} cambió a ${nuevoEstado}. Motivo: ${motivo ?? 'N/A'}`
+      });
+
+      return { ok: true };
+    } catch (err: any) {
+      console.error('Error en updateCitaEstado:', err);
+      return { ok: false, error: 'Error de conexión' };
+    }
+  };
+
   const addProveedor = (p: Omit<Proveedor, 'id'>) => setProveedores(prev => [...prev, { ...p, id: `pv${Date.now()}` }]);
   const updateProveedor = (id: string, p: Partial<Proveedor>) => setProveedores(prev => prev.map(x => x.id === id ? { ...x, ...p } : x));
   const deleteProveedor = (id: string) => setProveedores(prev => prev.filter(x => x.id !== id));
@@ -824,7 +863,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addPersonal, updatePersonal, deletePersonal,
       addCliente, updateCliente, deleteCliente,
       addVehiculo, updateVehiculo, deleteVehiculo,
-      addCita, updateCita, deleteCita, confirmarCita, reprogramarCita, cancelarCita,
+      addCita, updateCita, deleteCita, confirmarCita, reprogramarCita, cancelarCita, updateCitaEstado,
       addProveedor, updateProveedor, deleteProveedor,
       addOrden, updateOrden, deleteOrden,
       addRepuesto, updateRepuesto, deleteRepuesto,

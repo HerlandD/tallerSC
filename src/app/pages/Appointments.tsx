@@ -28,6 +28,7 @@ const estadoCitaConfig: Record<EstadoCita, { label: string; color: string; bg: s
   en_progreso: { label: 'En Proceso', color: 'text-blue-700',  bg: 'bg-blue-100',   dot: 'bg-blue-500' },
   completada:  { label: 'Completada', color: 'text-gray-600',  bg: 'bg-gray-100',   dot: 'bg-gray-400' },
   cancelada:   { label: 'Cancelada',  color: 'text-red-700',   bg: 'bg-red-100',    dot: 'bg-red-400' },
+  reprogramada: { label: 'Reprogramada', color: 'text-purple-700', bg: 'bg-purple-100', dot: 'bg-purple-500' },
 };
 
 const HORAS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00'];
@@ -782,7 +783,7 @@ export default function Appointments() {
                   </div>
                   <div className="flex flex-col gap-2 items-end flex-shrink-0">
                     {['pendiente', 'confirmada'].includes(c.estado) && (
-                      <button onClick={async () => { const r = await cancelarCita(c.id); r.ok ? toast.success('Cita cancelada') : toast.error(r.error ?? 'Error al cancelar'); }}
+                      <button onClick={() => { setCancelModal(c.id); setCancelMotivo(''); }}
                         className="text-xs text-red-500 hover:bg-red-50 px-2 py-1 rounded-lg border border-red-200">
                         Cancelar
                       </button>
