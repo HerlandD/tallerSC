@@ -515,8 +515,13 @@ export default function Appointments() {
     }
     if (!form.fecha) e.fecha = 'Selecciona una fecha';
     if (!form.notas?.trim() && isCliente) e.notas = 'Describe el motivo o falla de tu vehículo';
-    if (form.fecha && form.hora && !editId) {
-      const overlap = citas.find(c => c.fecha === form.fecha && c.hora === form.hora && c.estado !== 'cancelada');
+    if (form.fecha && form.hora) {
+      const overlap = citas.find(c => 
+        c.fecha === form.fecha && 
+        c.hora === form.hora && 
+        c.estado !== 'cancelada' &&
+        c.id !== editId
+      );
       if (overlap) e.hora = 'Esa franja horaria ya está ocupada';
     }
     setErrors(e);
@@ -947,7 +952,14 @@ export default function Appointments() {
                       <select value={form.hora}
                         onChange={e => setForm({ ...form, hora: e.target.value })}
                         className={inCls(errors.hora)}>
-                        {HORAS.map(h => <option key={h} value={h}>{h}</option>)}
+                        {HORAS.map(h => {
+                          const isBusy = citas.find(c => c.fecha === form.fecha && c.hora === h && c.estado !== 'cancelada' && c.id !== editId);
+                          return (
+                            <option key={h} value={h} className={isBusy ? 'text-gray-400 bg-gray-50' : ''}>
+                              {h} {isBusy ? '(Ocupado)' : ''}
+                            </option>
+                          );
+                        })}
                       </select>
                       {errors.hora && <p className="text-xs text-red-500 mt-1">{errors.hora}</p>}
                     </div>
@@ -1027,7 +1039,14 @@ export default function Appointments() {
                       <select value={form.hora}
                         onChange={e => setForm({ ...form, hora: e.target.value })}
                         className={inCls(errors.hora)}>
-                        {HORAS.map(h => <option key={h} value={h}>{h}</option>)}
+                        {HORAS.map(h => {
+                          const isBusy = citas.find(c => c.fecha === form.fecha && c.hora === h && c.estado !== 'cancelada' && c.id !== editId);
+                          return (
+                            <option key={h} value={h} className={isBusy ? 'text-gray-400 bg-gray-50' : ''}>
+                              {h} {isBusy ? '(Ocupado)' : ''}
+                            </option>
+                          );
+                        })}
                       </select>
                       {errors.hora && <p className="text-xs text-red-500 mt-1">{errors.hora}</p>}
                     </div>

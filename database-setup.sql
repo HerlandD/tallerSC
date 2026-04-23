@@ -1368,3 +1368,349 @@ EXCEPTION
 END;
 $$;
 GRANT EXECUTE ON FUNCTION toggle_activo_usuario(UUID, BOOLEAN) TO anon, authenticated;
+
+-- ─── 28. TABLA: repuestos ────────────────────────────────
+CREATE TABLE IF NOT EXISTS repuestos (
+  id                 UUID          DEFAULT gen_random_uuid() PRIMARY KEY,
+  nombre             VARCHAR(100)  NOT NULL,
+  categoria          VARCHAR(50),
+  cantidad           INT           NOT NULL DEFAULT 0,
+  cantidad_reservada INT           NOT NULL DEFAULT 0,
+  costo              DECIMAL(10,2) NOT NULL DEFAULT 0,
+  margen_ganancia    DECIMAL(10,2) NOT NULL DEFAULT 0,
+  precio             DECIMAL(10,2) NOT NULL DEFAULT 0,
+  stock_minimo       INT           NOT NULL DEFAULT 1,
+  proveedor_id       UUID,
+  imagen             TEXT,
+  created_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  deleted_at         TIMESTAMPTZ
+);
+ALTER TABLE repuestos ENABLE ROW LEVEL SECURITY;
+
+-- ─── 29. TABLA: ordenes_trabajo ──────────────────────────
+CREATE TABLE IF NOT EXISTS ordenes_trabajo (
+  id                 UUID          DEFAULT gen_random_uuid() PRIMARY KEY,
+  numero             VARCHAR(20)   NOT NULL UNIQUE,
+  cliente_id         UUID          NOT NULL REFERENCES clientes(id),
+  vehiculo_id        UUID          NOT NULL REFERENCES vehiculos(id),
+  mecanico_id        UUID          REFERENCES usuarios(id),
+  estado             VARCHAR(30)   NOT NULL DEFAULT 'registrada',
+  factura_id         VARCHAR(50),
+  fecha_creacion     DATE          NOT NULL DEFAULT CURRENT_DATE,
+  fecha_actualizacion DATE         NOT NULL DEFAULT CURRENT_DATE,
+  creado_por         UUID          REFERENCES usuarios(id),
+  -- Datos estructurados (JSONB) para flexibilidad con la lógica actual
+  datos_json         JSONB         NOT NULL DEFAULT '{}'::jsonb,
+  deleted_at         TIMESTAMPTZ
+);
+ALTER TABLE ordenes_trabajo ENABLE ROW LEVEL SECURITY;
+
+-- ─── 30. TABLA: facturas ─────────────────────────────────
+CREATE TABLE IF NOT EXISTS facturas (
+  id                 UUID          DEFAULT gen_random_uuid() PRIMARY KEY,
+  numero             VARCHAR(50)   NOT NULL UNIQUE,
+  orden_id           UUID          NOT NULL,
+  cliente_id         UUID          NOT NULL REFERENCES clientes(id),
+  subtotal           DECIMAL(10,2) NOT NULL,
+  impuesto           DECIMAL(10,2) NOT NULL,
+  total              DECIMAL(10,2) NOT NULL,
+  metodo_pago        VARCHAR(50),
+  estado             VARCHAR(20)   NOT NULL DEFAULT 'emitida'
+                       CHECK (estado IN ('emitida', 'pagada')),
+  datos_json         JSONB         NOT NULL DEFAULT '{}'::jsonb,
+  fecha              DATE          NOT NULL DEFAULT CURRENT_DATE
+);
+ALTER TABLE facturas ENABLE ROW LEVEL SECURITY;
+
+-- ─── 31. TABLA: logs_auditoria ───────────────────────────
+CREATE TABLE IF NOT EXISTS logs_auditoria (
+  id                 UUID          DEFAULT gen_random_uuid() PRIMARY KEY,
+  fecha              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  usuario_id         UUID          REFERENCES usuarios(id),
+  usuario_nombre     VARCHAR(100),
+  accion             VARCHAR(100)  NOT NULL,
+  modulo             VARCHAR(100),
+  detalles           TEXT,
+  entidad_id         UUID,
+  entidad_tipo       VARCHAR(50)
+);
+ALTER TABLE logs_auditoria ENABLE ROW LEVEL SECURITY;
+
+-- ─── 32. TABLA: kardex ───────────────────────────────────
+CREATE TABLE IF NOT EXISTS kardex (
+  id                 UUID          DEFAULT gen_random_uuid() PRIMARY KEY,
+  repuesto_id        UUID          REFERENCES repuestos(id),
+  repuesto_nombre    VARCHAR(100),
+  tipo               VARCHAR(50)   NOT NULL, -- 'entrada'|'salida'|'reserva'|'liberacion'|'ajuste'
+  cantidad           INT           NOT NULL,
+  stock_resultante   INT           NOT NULL,
+  fecha              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  usuario_id         UUID          REFERENCES usuarios(id),
+  usuario_nombre     VARCHAR(100),
+  orden_id           UUID,
+  observaciones      TEXT
+);
+ALTER TABLE kardex ENABLE ROW LEVEL SECURITY;
+
+-- =========================================================
+-- RPC: SINCRONIZACIÓN DE DATOS (Órdenes, Facturas, Stock)
+-- =========================================================
+
+-- ─── 33. RPC: listar_ordenes ─────────────────────────────
+CREATE OR REPLACE FUNCTION listar_ordenes(
+  p_usuario_id UUID DEFAULT NULL,
+  p_rol        TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF p_rol = 'cliente' AND p_usuario_id IS NOT NULL THEN
+    RETURN COALESCE((
+      SELECT json_agg(
+        (datos_json || jsonb_build_object(
+          'id', id, 'numero', numero, 'clienteId', cliente_id,
+          'vehiculoId', vehiculo_id, 'mecanicoId', mecanico_id,
+          'estado', estado, 'facturaId', factura_id,
+          'fechaCreacion', fecha_creacion::TEXT,
+          'fechaActualizacion', fecha_actualizacion::TEXT
+        )) ORDER BY fecha_creacion DESC
+      )
+      FROM ordenes_trabajo
+      WHERE (cliente_id IN (SELECT id FROM clientes WHERE usuario_id = p_usuario_id))
+        AND deleted_at IS NULL
+    ), '[]'::json);
+  ELSE
+    RETURN COALESCE((
+      SELECT json_agg(
+        (datos_json || jsonb_build_object(
+          'id', id, 'numero', numero, 'clienteId', cliente_id,
+          'vehiculoId', vehiculo_id, 'mecanicoId', mecanico_id,
+          'estado', estado, 'facturaId', factura_id,
+          'fechaCreacion', fecha_creacion::TEXT,
+          'fechaActualizacion', fecha_actualizacion::TEXT
+        )) ORDER BY fecha_creacion DESC
+      )
+      FROM ordenes_trabajo WHERE deleted_at IS NULL
+    ), '[]'::json);
+  END IF;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_ordenes(UUID, TEXT) TO anon, authenticated;
+
+-- ─── 34. RPC: crear_orden ────────────────────────────────
+CREATE OR REPLACE FUNCTION crear_orden(
+  p_numero           TEXT,
+  p_cliente_id       UUID,
+  p_vehiculo_id       UUID,
+  p_creado_por       UUID,
+  p_datos            JSONB
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE v_nueva ordenes_trabajo%ROWTYPE;
+BEGIN
+  INSERT INTO ordenes_trabajo (numero, cliente_id, vehiculo_id, creado_por, datos_json)
+  VALUES (p_numero, p_cliente_id, p_vehiculo_id, p_creado_por, p_datos)
+  RETURNING * INTO v_nueva;
+
+  RETURN json_build_object('success', TRUE, 'id', v_nueva.id);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION crear_orden(TEXT, UUID, UUID, UUID, JSONB) TO anon, authenticated;
+
+-- ─── 35. RPC: actualizar_orden ───────────────────────────
+CREATE OR REPLACE FUNCTION actualizar_orden(
+  p_id               UUID,
+  p_estado           TEXT    DEFAULT NULL,
+  p_mecanico_id      UUID    DEFAULT NULL,
+  p_factura_id       TEXT    DEFAULT NULL,
+  p_datos            JSONB   DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE ordenes_trabajo SET
+    estado             = COALESCE(p_estado, estado),
+    mecanico_id        = COALESCE(p_mecanico_id, mecanico_id),
+    factura_id         = COALESCE(p_factura_id, factura_id),
+    datos_json         = CASE WHEN p_datos IS NOT NULL THEN (datos_json || p_datos) ELSE datos_json END,
+    fecha_actualizacion = CURRENT_DATE
+  WHERE id = p_id;
+
+  RETURN json_build_object('success', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION actualizar_orden(UUID, TEXT, UUID, TEXT, JSONB) TO anon, authenticated;
+
+-- ─── 36. RPC: listar_facturas ─────────────────────────────
+CREATE OR REPLACE FUNCTION listar_facturas()
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(
+      (datos_json || jsonb_build_object(
+        'numero', numero, 'ordenId', orden_id, 'clienteId', cliente_id,
+        'total', total, 'subtotal', subtotal, 'impuesto', impuesto,
+        'estado', estado, 'metodoPago', metodo_pago, 'fecha', fecha::TEXT
+      )) ORDER BY fecha DESC
+    ) FROM facturas
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_facturas() TO anon, authenticated;
+
+-- ─── 37. RPC: crear_factura ──────────────────────────────
+CREATE OR REPLACE FUNCTION crear_factura(
+  p_numero           TEXT,
+  p_orden_id         UUID,
+  p_cliente_id       UUID,
+  p_subtotal         DECIMAL,
+  p_impuesto         DECIMAL,
+  p_total            DECIMAL,
+  p_metodo_pago      TEXT,
+  p_estado           TEXT,
+  p_datos            JSONB
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO facturas (numero, orden_id, cliente_id, subtotal, impuesto, total, metodo_pago, estado, datos_json)
+  VALUES (p_numero, p_orden_id, p_cliente_id, p_subtotal, p_impuesto, p_total, p_metodo_pago, p_estado, p_datos);
+  RETURN json_build_object('success', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION crear_factura(TEXT, UUID, UUID, DECIMAL, DECIMAL, DECIMAL, TEXT, TEXT, JSONB) TO anon, authenticated;
+
+-- ─── 38. RPC: actualizar_factura ─────────────────────────
+CREATE OR REPLACE FUNCTION actualizar_factura(
+  p_numero           TEXT,
+  p_estado           TEXT,
+  p_metodo_pago      TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE facturas SET
+    estado      = p_estado,
+    metodo_pago = COALESCE(p_metodo_pago, metodo_pago)
+  WHERE numero = p_numero;
+  RETURN json_build_object('success', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION actualizar_factura(TEXT, TEXT, TEXT) TO anon, authenticated;
+
+-- ─── 39. RPC: listar_repuestos ────────────────────────────
+CREATE OR REPLACE FUNCTION listar_repuestos()
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', id, 'nombre', nombre, 'categoria', categoria,
+      'cantidad', cantidad, 'cantidadReservada', cantidad_reservada,
+      'costo', costo, 'margenGanancia', margen_ganancia, 'precio', precio,
+      'stockMinimo', stock_minimo, 'proveedorId', proveedor_id, 'imagen', imagen
+    ) ORDER BY nombre ASC)
+    FROM repuestos WHERE deleted_at IS NULL
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_repuestos() TO anon, authenticated;
+
+-- ─── 40. RPC: insertar_log_auditoria ──────────────────────
+CREATE OR REPLACE FUNCTION insertar_log_auditoria(
+  p_usuario_id     UUID,
+  p_usuario_nombre TEXT,
+  p_accion         TEXT,
+  p_modulo         TEXT,
+  p_detalles       TEXT,
+  p_entidad_id     UUID DEFAULT NULL,
+  p_entidad_tipo   TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO logs_auditoria (usuario_id, usuario_nombre, accion, modulo, detalles, entidad_id, entidad_tipo)
+  VALUES (p_usuario_id, p_usuario_nombre, p_accion, p_modulo, p_detalles, p_entidad_id, p_entidad_tipo);
+  RETURN json_build_object('success', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION insertar_log_auditoria(UUID, TEXT, TEXT, TEXT, TEXT, UUID, TEXT) TO anon, authenticated;
+
+-- ─── 41. RPC: actualizar_repuesto ────────────────────────
+CREATE OR REPLACE FUNCTION actualizar_repuesto(
+  p_id               UUID,
+  p_cantidad         INT     DEFAULT NULL,
+  p_cantidad_reservada INT   DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE repuestos SET
+    cantidad           = COALESCE(p_cantidad, cantidad),
+    cantidad_reservada = COALESCE(p_cantidad_reservada, cantidad_reservada)
+  WHERE id = p_id;
+  RETURN json_build_object('success', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION actualizar_repuesto(UUID, INT, INT) TO anon, authenticated;
+
+-- ─── 42. RPC: registrar_movimiento_kardex ────────────────
+CREATE OR REPLACE FUNCTION registrar_movimiento_kardex(
+  p_repuesto_id      UUID,
+  p_repuesto_nombre  TEXT,
+  p_tipo             TEXT,
+  p_cantidad         INT,
+  p_stock_resultante INT,
+  p_usuario_id       UUID,
+  p_usuario_nombre   TEXT,
+  p_orden_id         UUID   DEFAULT NULL,
+  p_observaciones    TEXT   DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO kardex (repuesto_id, repuesto_nombre, tipo, cantidad, stock_resultante, usuario_id, usuario_nombre, orden_id, observaciones)
+  VALUES (p_repuesto_id, p_repuesto_nombre, p_tipo, p_cantidad, p_stock_resultante, p_usuario_id, p_usuario_nombre, p_orden_id, p_observaciones);
+  RETURN json_build_object('success', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION registrar_movimiento_kardex(UUID, TEXT, TEXT, INT, INT, UUID, TEXT, UUID, TEXT) TO anon, authenticated;
+
+-- ─── 43. TRIGGER: Auditoría Automática de Órdenes ───────
+CREATE OR REPLACE FUNCTION fn_audit_orden_trabajo()
+RETURNS TRIGGER AS $$
+DECLARE
+    detalles_txt TEXT;
+BEGIN
+    IF (TG_OP = 'UPDATE') THEN
+        IF (OLD.estado <> NEW.estado) THEN
+            detalles_txt := 'Cambio de estado: ' || OLD.estado || ' -> ' || NEW.estado;
+            
+            INSERT INTO logs_auditoria (usuario_id, usuario_nombre, accion, modulo, detalles, entidad_id, entidad_tipo)
+            VALUES (COALESCE(NEW.creado_por, '00000000-0000-0000-0000-000000000000'::UUID), 'Sistema (Trigger)', 'CAMBIO_ESTADO_AUTO', 'Órdenes', detalles_txt, NEW.id, 'OrdenTrabajo');
+        END IF;
+
+        IF (OLD.datos->>'mecanicoId' <> NEW.datos->>'mecanicoId' OR (OLD.datos->>'mecanicoId' IS NULL AND NEW.datos->>'mecanicoId' IS NOT NULL)) THEN
+            INSERT INTO logs_auditoria (usuario_id, usuario_nombre, accion, modulo, detalles, entidad_id, entidad_tipo)
+            VALUES (COALESCE(NEW.creado_por, '00000000-0000-0000-0000-000000000000'::UUID), 'Sistema (Trigger)', 'CAMBIO_MECANICO', 'Órdenes', 'Nuevo mecánico asignado a la orden', NEW.id, 'OrdenTrabajo');
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_audit_orden_trabajo
+AFTER UPDATE ON ordenes_trabajo
+FOR EACH ROW EXECUTE FUNCTION fn_audit_orden_trabajo();

@@ -59,7 +59,7 @@ function PhotoGrid({ photos, onRemove, emptyMsg = 'Sin fotos' }: {
 }
 
 function UploadBtn({ label, inputRef, onChange, count }: {
-  label: string; inputRef: React.RefObject<HTMLInputElement>;
+  label: string; inputRef: React.RefObject<HTMLInputElement | null>;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void; count: number;
 }) {
   return (
@@ -988,18 +988,18 @@ function ModalDetalle({ orden, onClose, currentUser }: {
   currentUser: ReturnType<typeof useApp>['currentUser'];
 }) {
   const { clientes, vehiculos, usuarios, repuestos, catalogs, updateOrden, deleteOrden,
-    registrarSalidaRepuesto, reservarRepuestos, liberarReservas, addAuditoria, addFactura, addNotificacion } = useApp();
+    registrarSalidaRepuesto, reservarRepuestos, liberarReservas, addAuditoria, addFactura, updateFactura, rechazarCotizacion, addNotificacion } = useApp();
 
   const [localOrden, setLocalOrden] = useState<OrdenTrabajo>(orden);
 
-  const update = (data: Partial<OrdenTrabajo>) => {
+  const update = async (data: Partial<OrdenTrabajo>) => {
     const updated = { ...localOrden, ...data, fechaActualizacion: new Date().toISOString().split('T')[0] };
     setLocalOrden(updated);
-    updateOrden(localOrden.id, data);
+    await updateOrden(localOrden.id, data);
   };
 
-  const log = (accion: string, detalles: string) => {
-    if (currentUser) addAuditoria({ fecha: new Date().toISOString(), usuarioId: currentUser.id, usuarioNombre: currentUser.nombre, accion, modulo: 'Órdenes', detalles, entidadId: localOrden.id, entidadTipo: 'OrdenTrabajo' });
+  const log = async (accion: string, detalles: string) => {
+    if (currentUser) await addAuditoria({ fecha: new Date().toISOString(), usuarioId: currentUser.id, usuarioNombre: currentUser.nombre, accion, modulo: 'Órdenes', detalles, entidadId: localOrden.id, entidadTipo: 'OrdenTrabajo' });
   };
 
   const cliente = clientes.find(c => c.id === localOrden.clienteId);
@@ -1156,20 +1156,21 @@ function ModalDetalle({ orden, onClose, currentUser }: {
           {localOrden.estado === 'esperando_aprobacion' && isCliente && (
             <PanelAprobacion
               orden={localOrden} totalCot={totalCot}
-              onAprobar={() => {
+              onAprobar={async () => {
                 if (localOrden.repuestosReservados?.length) {
-                  localOrden.repuestosReservados.forEach(r => registrarSalidaRepuesto(r.repuestoId, r.cantidad, localOrden.id));
-                  liberarReservas(localOrden.repuestosReservados, localOrden.id);
+                  for (const r of localOrden.repuestosReservados) {
+                    await registrarSalidaRepuesto(r.repuestoId, r.cantidad, localOrden.id);
+                  }
+                  await liberarReservas(localOrden.repuestosReservados, localOrden.id);
                 }
-                update({ cotizacion: { ...localOrden.cotizacion!, estado: 'aprobada', fechaRespuesta: new Date().toISOString().split('T')[0] }, estado: 'en_reparacion' });
-                log('APROBAR_COTIZACION', `Cliente aprobó cotización. OT → EN_REPARACION`);
+                await update({ cotizacion: { ...localOrden.cotizacion!, estado: 'aprobada', fechaRespuesta: new Date().toISOString().split('T')[0] }, estado: 'en_reparacion' });
+                await log('APROBAR_COTIZACION', `Cliente aprobó cotización. OT → EN_REPARACION`);
                 toast.success('✅ Aprobado. El taller iniciará la reparación de tu vehículo.');
               }}
-              onRechazar={() => {
-                if (localOrden.repuestosReservados?.length) liberarReservas(localOrden.repuestosReservados, localOrden.id);
-                update({ cotizacion: { ...localOrden.cotizacion!, estado: 'rechazada', fechaRespuesta: new Date().toISOString().split('T')[0] }, estado: 'liquidacion_diagnostico' });
-                log('RECHAZAR_COTIZACION', `Cliente rechazó cotización. OT → LIQUIDACION_DIAGNOSTICO`);
-                toast.info('Cotización rechazada. Se cobrará solo el diagnóstico.');
+              onRechazar={async () => {
+                await rechazarCotizacion(localOrden.id);
+                onClose(); // Cerrar modal para refrescar o mostrar toast desde context si se añade
+                toast.info('Cotización rechazada. Se ha generado un cargo por diagnóstico.');
               }}
             />
           )}
@@ -1212,13 +1213,21 @@ function ModalDetalle({ orden, onClose, currentUser }: {
           {localOrden.estado === 'liquidacion_diagnostico' && (isAsesor || isCliente || isAdmin) && (
             <PanelLiquidacion
               orden={localOrden} catalogs={catalogs}
-              onPagar={(metodoPago) => {
+              onPagar={async (metodoPago) => {
                 const costoDx = localOrden.cotizacion?.costoDiagnostico || 30;
-                const factura = generarFactura(costoDx, metodoPago);
-                addFactura(factura);
-                update({ estado: 'finalizada', entregaFirmada: true, facturaId: factura.numero });
-                log('LIQUIDACION_PAGADA', `Diagnóstico cobrado $${costoDx}. Factura ${factura.numero}. OT FINALIZADA.`);
-                toast.success(`Pago de diagnóstico registrado. Factura ${factura.numero} generada.`);
+                if (localOrden.facturaId) {
+                  // Actualizar factura existente (generada al rechazar)
+                  await updateFactura(localOrden.facturaId, { estado: 'pagada', metodoPago });
+                  await update({ estado: 'finalizada', entregaFirmada: true });
+                  await log('LIQUIDACION_PAGADA', `Diagnóstico pagado $${costoDx} (${metodoPago}). OT FINALIZADA.`);
+                } else {
+                  // Fallback por si no se generó factura previa (retrocompatibilidad)
+                  const factura = generarFactura(costoDx, metodoPago);
+                  await addFactura(factura);
+                  await update({ estado: 'finalizada', entregaFirmada: true, facturaId: factura.numero });
+                  await log('LIQUIDACION_PAGADA', `Diagnóstico cobrado $${costoDx}. Factura ${factura.numero}. OT FINALIZADA.`);
+                }
+                toast.success(`Pago de diagnóstico registrado correctamente.`);
                 onClose();
               }}
             />

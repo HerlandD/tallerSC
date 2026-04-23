@@ -276,6 +276,9 @@ interface AppContextType {
   addKardex: (m: Omit<MovimientoKardex, 'id'>) => void;
   addAuditoria: (log: Omit<LogAuditoria, 'id'>) => void;
   addFactura: (f: Factura) => void;
+  updateFactura: (numero: string, f: Partial<Factura>) => void;
+  rechazarCotizacion: (ordenId: string, motivo?: string) => Promise<void>;
+  aprobarCotizacion: (ordenId: string) => Promise<void>;
 
   notificaciones: Notificacion[];
   addNotificacion: (n: Omit<Notificacion, 'id' | 'fecha' | 'leida'>) => void;
@@ -429,6 +432,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
       p_rol:        currentUser.rol,
     }).then(({ data }) => {
       if (Array.isArray(data)) setCitas(data as Cita[]);
+    });
+
+    supabase.rpc('listar_ordenes', {
+      p_usuario_id: currentUser.id,
+      p_rol:        currentUser.rol
+    }).then(({ data }) => {
+      if (Array.isArray(data)) setOrdenes(data as OrdenTrabajo[]);
+    });
+
+    supabase.rpc('listar_facturas').then(({ data }) => {
+      if (Array.isArray(data)) setFacturas(data as Factura[]);
+    });
+
+    supabase.rpc('listar_repuestos').then(({ data }) => {
+      if (Array.isArray(data)) setRepuestos(data as Repuesto[]);
     });
   }, [currentUser?.id]);
 
@@ -747,16 +765,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateProveedor = (id: string, p: Partial<Proveedor>) => setProveedores(prev => prev.map(x => x.id === id ? { ...x, ...p } : x));
   const deleteProveedor = (id: string) => setProveedores(prev => prev.filter(x => x.id !== id));
 
-  const addOrden = (o: Omit<OrdenTrabajo, 'id' | 'numero' | 'fechaCreacion' | 'fechaActualizacion' | 'repuestosUsados' | 'entregaFirmada'>) => {
-    setOrdenes(prev => {
-      const num = `OT-${String(prev.length + 1).padStart(3, '0')}`;
-      const now = new Date().toISOString().split('T')[0];
-      return [...prev, { ...o, id: `o${Date.now()}`, numero: num, fechaCreacion: now, fechaActualizacion: now, repuestosUsados: [], entregaFirmada: false }];
+  const addOrden = async (o: Omit<OrdenTrabajo, 'id' | 'numero' | 'fechaCreacion' | 'fechaActualizacion' | 'repuestosUsados' | 'entregaFirmada'>) => {
+    const num = `OT-${String(ordenes.length + 1).padStart(3, '0')}`;
+    const { data, error } = await supabase.rpc('crear_orden', {
+      p_numero: num,
+      p_cliente_id: o.clienteId,
+      p_vehiculo_id: o.vehiculoId,
+      p_creado_por: currentUser?.id,
+      p_datos: { ...o, repuestosUsados: [], entregaFirmada: false }
     });
+    
+    if (!error && data?.success) {
+      const now = new Date().toISOString().split('T')[0];
+      setOrdenes(prev => [...prev, { ...o, id: data.id, numero: num, fechaCreacion: now, fechaActualizacion: now, repuestosUsados: [], entregaFirmada: false }]);
+    }
   };
 
-  const updateOrden = (id: string, o: Partial<OrdenTrabajo>) =>
-    setOrdenes(p => p.map(x => x.id === id ? { ...x, ...o, fechaActualizacion: new Date().toISOString().split('T')[0] } : x));
+  const updateOrden = async (id: string, o: Partial<OrdenTrabajo>) => {
+    const { error } = await supabase.rpc('actualizar_orden', {
+      p_id: id,
+      p_estado: o.estado,
+      p_mecanico_id: o.mecanicoId,
+      p_factura_id: o.facturaId,
+      p_datos: o
+    });
+    if (!error) {
+      setOrdenes(p => p.map(x => x.id === id ? { ...x, ...o, fechaActualizacion: new Date().toISOString().split('T')[0] } : x));
+    }
+  };
 
   const deleteOrden = (id: string) => setOrdenes(p => p.filter(x => x.id !== id));
 
@@ -764,58 +800,68 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateRepuesto = (id: string, r: Partial<Repuesto>) => setRepuestos(p => p.map(x => x.id === id ? { ...x, ...r } : x));
   const deleteRepuesto = (id: string) => setRepuestos(p => p.filter(x => x.id !== id));
 
-  const registrarSalidaRepuesto = (repuestoId: string, cantidad: number, ordenId?: string): boolean => {
+  const registrarSalidaRepuesto = async (repuestoId: string, cantidad: number, ordenId?: string): Promise<boolean> => {
     const rep = repuestos.find(r => r.id === repuestoId);
     if (!rep || rep.cantidad < cantidad) return false;
     const newCantidad = rep.cantidad - cantidad;
-    setRepuestos(p => p.map(r => r.id === repuestoId ? { ...r, cantidad: newCantidad } : r));
+    
+    await supabase.rpc('actualizar_repuesto', { p_id: repuestoId, p_cantidad: newCantidad });
     if (currentUser) {
-      setKardex(prev => [...prev, {
-        id: `k${Date.now()}`, repuestoId, repuestoNombre: rep.nombre, tipo: 'salida',
-        cantidad, stockResultante: newCantidad, fecha: new Date().toISOString(),
-        usuarioId: currentUser.id, usuarioNombre: currentUser.nombre, ordenId,
-        observaciones: ordenId ? `Salida por ${ordenId}` : 'Salida manual',
-      }]);
+      await supabase.rpc('registrar_movimiento_kardex', {
+        p_repuesto_id: repuestoId, p_repuesto_nombre: rep.nombre, p_tipo: 'salida',
+        p_cantidad: cantidad, p_stock_resultante: newCantidad,
+        p_usuario_id: currentUser.id, p_usuario_nombre: currentUser.nombre,
+        p_orden_id: ordenId, p_observaciones: ordenId ? `Salida por ${ordenId}` : 'Salida manual'
+      });
     }
+    setRepuestos(p => p.map(r => r.id === repuestoId ? { ...r, cantidad: newCantidad } : r));
     return true;
   };
 
-  const reservarRepuestos = (repuestosReservados: RepuestoUsado[], ordenId: string): boolean => {
+  const reservarRepuestos = async (repuestosReservados: RepuestoUsado[], ordenId: string): Promise<boolean> => {
     for (const rep of repuestosReservados) {
       const stock = repuestos.find(r => r.id === rep.repuestoId);
-      if (!stock || (stock.cantidad - stock.cantidadReservada) < rep.cantidad) return false;
+      if (!stock || (stock.cantidad - (stock.cantidadReservada || 0)) < rep.cantidad) return false;
+    }
+
+    for (const res of repuestosReservados) {
+      const r = repuestos.find(x => x.id === res.repuestoId)!;
+      const newReservada = (r.cantidadReservada || 0) + res.cantidad;
+      await supabase.rpc('actualizar_repuesto', { p_id: r.id, p_cantidad_reservada: newReservada });
+      if (currentUser) {
+        await supabase.rpc('registrar_movimiento_kardex', {
+          p_repuesto_id: r.id, p_repuesto_nombre: r.nombre, p_tipo: 'reserva',
+          p_cantidad: res.cantidad, p_stock_resultante: r.cantidad,
+          p_usuario_id: currentUser.id, p_usuario_nombre: currentUser.nombre,
+          p_orden_id: ordenId, p_observaciones: `Reserva para ${ordenId}`
+        });
+      }
     }
     setRepuestos(prev => prev.map(r => {
       const res = repuestosReservados.find(rv => rv.repuestoId === r.id);
-      if (!res) return r;
-      const newReservada = (r.cantidadReservada || 0) + res.cantidad;
-      if (currentUser) {
-        setKardex(k => [...k, {
-          id: `k${Date.now()}_${r.id}`, repuestoId: r.id, repuestoNombre: r.nombre, tipo: 'reserva',
-          cantidad: res.cantidad, stockResultante: r.cantidad, fecha: new Date().toISOString(),
-          usuarioId: currentUser.id, usuarioNombre: currentUser.nombre, ordenId,
-          observaciones: `Reserva para ${ordenId}`,
-        }]);
-      }
-      return { ...r, cantidadReservada: newReservada };
+      return res ? { ...r, cantidadReservada: (r.cantidadReservada || 0) + res.cantidad } : r;
     }));
     return true;
   };
 
-  const liberarReservas = (repuestosReservados: RepuestoUsado[], ordenId: string) => {
+  const liberarReservas = async (repuestosReservados: RepuestoUsado[], ordenId: string) => {
+    for (const res of repuestosReservados) {
+      const r = repuestos.find(x => x.id === res.repuestoId);
+      if (!r) continue;
+      const newReservada = Math.max(0, (r.cantidadReservada || 0) - res.cantidad);
+      await supabase.rpc('actualizar_repuesto', { p_id: r.id, p_cantidad_reservada: newReservada });
+      if (currentUser) {
+        await supabase.rpc('registrar_movimiento_kardex', {
+          p_repuesto_id: r.id, p_repuesto_nombre: r.nombre, p_tipo: 'liberacion',
+          p_cantidad: res.cantidad, p_stock_resultante: r.cantidad,
+          p_usuario_id: currentUser.id, p_usuario_nombre: currentUser.nombre,
+          p_orden_id: ordenId, p_observaciones: `Liberación por ${ordenId}`
+        });
+      }
+    }
     setRepuestos(prev => prev.map(r => {
       const res = repuestosReservados.find(rv => rv.repuestoId === r.id);
-      if (!res) return r;
-      const newReservada = Math.max(0, (r.cantidadReservada || 0) - res.cantidad);
-      if (currentUser) {
-        setKardex(k => [...k, {
-          id: `k${Date.now()}_lib_${r.id}`, repuestoId: r.id, repuestoNombre: r.nombre, tipo: 'liberacion',
-          cantidad: res.cantidad, stockResultante: r.cantidad, fecha: new Date().toISOString(),
-          usuarioId: currentUser.id, usuarioNombre: currentUser.nombre, ordenId,
-          observaciones: `Liberación por ${ordenId}`,
-        }]);
-      }
-      return { ...r, cantidadReservada: newReservada };
+      return res ? { ...r, cantidadReservada: Math.max(0, (r.cantidadReservada || 0) - res.cantidad) } : r;
     }));
   };
 
@@ -839,10 +885,138 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addKardex = (m: Omit<MovimientoKardex, 'id'>) =>
     setKardex(prev => [...prev, { ...m, id: `k${Date.now()}` }]);
 
-  const addAuditoria = (log: Omit<LogAuditoria, 'id'>) =>
+  const addAuditoria = async (log: Omit<LogAuditoria, 'id'>) => {
+    await supabase.rpc('insertar_log_auditoria', {
+      p_usuario_id: log.usuarioId,
+      p_usuario_nombre: log.usuarioNombre,
+      p_accion: log.accion,
+      p_modulo: log.modulo,
+      p_detalles: log.detalles,
+      p_entidad_id: log.entidadId,
+      p_entidad_tipo: log.entidadTipo
+    });
     setAuditoria(prev => [...prev, { ...log, id: `a${Date.now()}` }]);
+  };
 
-  const addFactura = (f: Factura) => setFacturas(prev => [...prev, f]);
+  const addFactura = async (f: Factura) => {
+    const { error } = await supabase.rpc('crear_factura', {
+      p_numero: f.numero,
+      p_orden_id: f.ordenId,
+      p_cliente_id: f.clienteId,
+      p_subtotal: f.subtotal,
+      p_impuesto: f.impuesto,
+      p_total: f.total,
+      p_metodo_pago: f.metodoPago,
+      p_estado: f.estado,
+      p_datos: f
+    });
+    if (!error) setFacturas(prev => [...prev, f]);
+  };
+
+  const updateFactura = async (numero: string, data: Partial<Factura>) => {
+    const { error } = await supabase.rpc('actualizar_factura', {
+      p_numero: numero,
+      p_estado: data.estado,
+      p_metodo_pago: data.metodoPago
+    });
+    if (!error) setFacturas(prev => prev.map(f => f.numero === numero ? { ...f, ...data } : f));
+  };
+
+  const rechazarCotizacion = async (ordenId: string, motivo?: string) => {
+    const orden = ordenes.find(o => o.id === ordenId);
+    if (!orden) return;
+
+    // 1. Liberar reservas si existen
+    if (orden.repuestosReservados && orden.repuestosReservados.length > 0) {
+      liberarReservas(orden.repuestosReservados, orden.id);
+    }
+
+    const costoDx = orden.cotizacion?.costoDiagnostico || 0;
+    let facturaId = orden.facturaId;
+
+    // 2. Generar cargo por diagnóstico si aplica
+    if (costoDx > 0 && !facturaId) {
+      const numFac = `FAC-DX-${Date.now()}`;
+      const nuevaFactura: Factura = {
+        numero: numFac,
+        fecha: new Date().toISOString().split('T')[0],
+        ordenId: orden.id,
+        clienteId: orden.clienteId,
+        subtotal: costoDx,
+        impuesto: costoDx * 0.12,
+        total: costoDx * 1.12,
+        metodoPago: 'Pendiente',
+        estado: 'emitida',
+      };
+      await addFactura(nuevaFactura);
+      facturaId = numFac;
+    }
+
+    // 3. Actualizar estado de la OT en Supabase
+    const updateData: Partial<OrdenTrabajo> = {
+      estado: 'liquidacion_diagnostico',
+      facturaId,
+      cotizacion: orden.cotizacion ? {
+        ...orden.cotizacion,
+        estado: 'rechazada',
+        motivoRechazo: motivo,
+        fechaRespuesta: new Date().toISOString().split('T')[0]
+      } : undefined
+    };
+    await updateOrden(orden.id, updateData);
+
+    // 4. Log Auditoría
+    if (currentUser) {
+      await addAuditoria({
+        fecha: new Date().toISOString(),
+        usuarioId: currentUser.id,
+        usuarioNombre: currentUser.nombre,
+        accion: 'RECHAZAR_COTIZACION',
+        modulo: 'Órdenes',
+        detalles: `Cotización rechazada. Cargado diagnóstico $${costoDx}. OT → LIQUIDACION_DIAGNOSTICO`,
+        entidadId: orden.id,
+        entidadTipo: 'OrdenTrabajo'
+      });
+    }
+  };
+
+  const aprobarCotizacion = async (ordenId: string) => {
+    const orden = ordenes.find(o => o.id === ordenId);
+    if (!orden) return;
+
+    // 1. Procesar repuestos reservados (convertir reserva a salida real)
+    if (orden.repuestosReservados && orden.repuestosReservados.length > 0) {
+      for (const r of orden.repuestosReservados) {
+        await registrarSalidaRepuesto(r.repuestoId, r.cantidad, orden.id);
+      }
+      await liberarReservas(orden.repuestosReservados, orden.id);
+    }
+
+    // 2. Actualizar estado de la OT en Supabase
+    const updateData: Partial<OrdenTrabajo> = {
+      estado: 'en_reparacion',
+      cotizacion: orden.cotizacion ? {
+        ...orden.cotizacion,
+        estado: 'aprobada',
+        fechaRespuesta: new Date().toISOString().split('T')[0]
+      } : undefined
+    };
+    await updateOrden(orden.id, updateData);
+
+    // 3. Log Auditoría
+    if (currentUser) {
+      await addAuditoria({
+        fecha: new Date().toISOString(),
+        usuarioId: currentUser.id,
+        usuarioNombre: currentUser.nombre,
+        accion: 'APROBAR_COTIZACION',
+        modulo: 'Órdenes',
+        detalles: `Cotización aprobada por el cliente. OT → EN_REPARACION`,
+        entidadId: orden.id,
+        entidadTipo: 'OrdenTrabajo'
+      });
+    }
+  };
 
   const addNotificacion = (n: Omit<Notificacion, 'id' | 'fecha' | 'leida'>) =>
     setNotificaciones(prev => [...prev, { ...n, id: `n${Date.now()}`, fecha: new Date().toISOString(), leida: false }]);
@@ -868,7 +1042,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addOrden, updateOrden, deleteOrden,
       addRepuesto, updateRepuesto, deleteRepuesto,
       registrarSalidaRepuesto, reservarRepuestos, liberarReservas, addStockRepuesto,
-      addKardex, addAuditoria, addFactura,
+      addKardex, addAuditoria, addFactura, updateFactura, rechazarCotizacion, aprobarCotizacion,
       notificaciones, addNotificacion, marcarNotificacionLeida, marcarTodasLeidas,
       updateCatalogs,
     }}>

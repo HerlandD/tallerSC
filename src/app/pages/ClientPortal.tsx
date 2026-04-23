@@ -171,7 +171,7 @@ function ModalHistorialVehiculo({ vehiculo, ordenes, onClose }: {
 function ModalAgendarCita({ vehiculos, clienteId, onClose }: {
   vehiculos: Vehiculo[]; clienteId: string; onClose: () => void;
 }) {
-  const { addCita } = useApp();
+  const { addCita, citas } = useApp();
   const [form, setForm] = useState({ vehiculoId:'', tipoServicio:'', fecha:'', hora:'09:00', motivoIngreso:'', notas:'' });
   const tiposServicio = ['Mantenimiento General','Cambio de Aceite','Frenos','Electricidad','Suspensión','Motor','Carrocería','Diagnóstico','Revisión Técnica'];
   const horarios = ['08:00','08:30','09:00','09:30','10:00','10:30','11:00','11:30','14:00','14:30','15:00','15:30','16:00','16:30'];
@@ -180,6 +180,15 @@ function ModalAgendarCita({ vehiculos, clienteId, onClose }: {
   const handleSubmit = async () => {
     if (!form.vehiculoId || !form.tipoServicio || !form.fecha || !form.motivoIngreso) {
       toast.error('Completa todos los campos requeridos'); return;
+    }
+    const overlap = citas.find(c => 
+      c.fecha === form.fecha && 
+      c.hora === form.hora && 
+      c.estado !== 'cancelada'
+    );
+    if (overlap) {
+      toast.error('Esta franja horaria ya está reservada. Por favor elige otra.');
+      return;
     }
     const result = await addCita({
       clienteId:     clienteId,
@@ -236,7 +245,14 @@ function ModalAgendarCita({ vehiculos, clienteId, onClose }: {
               <label className="block text-xs font-bold text-slate-600 mb-1.5">Hora preferida</label>
               <select value={form.hora} onChange={e => setForm({...form, hora:e.target.value})}
                 className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 bg-white">
-                {horarios.map(h => <option key={h} value={h}>{h}</option>)}
+                {horarios.map(h => {
+                  const isBusy = citas.find(c => c.fecha === form.fecha && c.hora === h && c.estado !== 'cancelada');
+                  return (
+                    <option key={h} value={h} className={isBusy ? 'text-slate-400 bg-slate-50' : ''}>
+                      {h} {isBusy ? '(Ocupado)' : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
           </div>
@@ -266,6 +282,7 @@ function ModalAgendarCita({ vehiculos, clienteId, onClose }: {
 function ServicioCard({ orden, vehiculo, onPagar }: {
   orden: OrdenTrabajo; vehiculo: Vehiculo | undefined; onPagar: () => void;
 }) {
+  const { rechazarCotizacion, aprobarCotizacion } = useApp();
   const [expanded, setExpanded] = useState(false);
   const cfg = ESTADO_CONFIG[orden.estado];
   const stepIdx = getStepIndex(orden.estado);
@@ -354,7 +371,27 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
               <div className="flex justify-between text-xs text-slate-500"><span>IVA 12%</span><span>${(total*0.12).toFixed(2)}</span></div>
               <div className="flex justify-between font-bold text-amber-800 text-sm"><span>Total</span><span>${(total*1.12).toFixed(2)}</span></div>
             </div>
-            <p className="text-xs text-amber-600 flex items-center gap-1"><Info size={10}/> Para aprobar o rechazar, visita la recepción del taller</p>
+            <div className="flex gap-2 mt-2 pt-2 border-t border-amber-200">
+              <button 
+                onClick={() => {
+                  const m = prompt('Motivo del rechazo (opcional):');
+                  rechazarCotizacion(orden.id, m || undefined);
+                  toast.info('Cotización rechazada. Se ha generado un cobro por diagnóstico.');
+                }}
+                className="flex-1 py-1.5 bg-white text-red-600 border border-red-200 rounded-lg text-[10px] font-bold hover:bg-red-50 transition-colors"
+              >
+                Rechazar
+              </button>
+              <button 
+                onClick={() => {
+                  aprobarCotizacion(orden.id);
+                  toast.success('¡Cotización aprobada! El taller iniciará la reparación.');
+                }}
+                className="flex-1 py-1.5 bg-amber-500 text-white rounded-lg text-[10px] font-bold hover:bg-amber-600 transition-colors shadow-sm"
+              >
+                Aprobar Presupuesto
+              </button>
+            </div>
           </div>
         )}
 
@@ -394,7 +431,7 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
 export default function ClientPortal() {
   const {
     ordenes, clientes, vehiculos, currentUser, notificaciones, marcarNotificacionLeida,
-    citas, updateOrden, addFactura, addNotificacion
+    citas, updateOrden, addFactura, addNotificacion, rechazarCotizacion, aprobarCotizacion
   } = useApp();
 
   const [historialVehiculo, setHistorialVehiculo] = useState<Vehiculo | null>(null);
@@ -552,7 +589,27 @@ export default function ClientPortal() {
                 <div className="flex-1">
                   <p className="font-bold text-amber-800 text-sm">⚡ Cotización pendiente de aprobación</p>
                   <p className="text-amber-700 text-xs mt-0.5">{o.numero} · {veh?.placa} · <strong>${(total * 1.12).toFixed(2)}</strong> con IVA</p>
-                  <p className="text-amber-600 text-xs mt-1">Visita el taller o contacta a tu asesor para aprobar o rechazar</p>
+                  <div className="flex gap-2 mt-2">
+                    <button 
+                      onClick={() => {
+                        const m = prompt('Motivo del rechazo (opcional):');
+                        rechazarCotizacion(o.id, m || undefined);
+                        toast.info('Cotización rechazada.');
+                      }}
+                      className="px-3 py-1 bg-white text-red-600 border border-red-200 rounded-lg text-[10px] font-bold"
+                    >
+                      Rechazar
+                    </button>
+                    <button 
+                      onClick={() => {
+                        aprobarCotizacion(o.id);
+                        toast.success('¡Aprobado!');
+                      }}
+                      className="px-3 py-1 bg-amber-500 text-white rounded-lg text-[10px] font-bold shadow-sm"
+                    >
+                      Aprobar
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
