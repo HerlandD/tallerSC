@@ -5,12 +5,15 @@ import {
   Receipt, Calendar, AlertTriangle, ThumbsUp, Info, Plus,
   History, Star, Package, CreditCard as PayIcon,
   Smartphone, Banknote, X, CheckSquare, ArrowRight, User, Shield,
-  Fuel, Settings, Droplet, ChevronDown, ChevronUp
+  Fuel, Settings, Droplet, ChevronDown, ChevronUp, Printer
 } from 'lucide-react';
 import { useApp, OrdenTrabajo, EstadoOrden, Vehiculo } from '../context/AppContext';
+import DocumentoPDF from '../components/DocumentoPDF';
 import { ESTADO_CONFIG } from './Dashboard';
 import { useNavigate } from 'react-router';
+// @ts-ignore
 import logoImg from 'figma:asset/705ae0af64042a0b0fa15a9246b41db08254ad91.png';
+// @ts-ignore
 import clienteAvatarImg from 'figma:asset/7fef9965c0f7d500348453229f33b07ab2f187c3.png';
 import { toast } from 'sonner';
 
@@ -115,7 +118,15 @@ function ModalHistorialVehiculo({ vehiculo, ordenes, onClose }: {
               <p className="text-slate-300 text-xs">{vehiculo.marca} {vehiculo.modelo} {vehiculo.año}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 bg-white/10 rounded-lg hover:bg-white/20"><X size={16} className="text-white"/></button>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => window.print()}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all shadow-lg"
+            >
+              <Printer size={14} /> Imprimir PDF
+            </button>
+            <button onClick={onClose} className="p-1.5 bg-white/10 rounded-lg hover:bg-white/20"><X size={16} className="text-white"/></button>
+          </div>
         </div>
         <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-100 flex gap-4 text-xs text-slate-500">
           {vehiculo.color && <span>Color: <strong className="text-slate-700">{vehiculo.color}</strong></span>}
@@ -123,6 +134,16 @@ function ModalHistorialVehiculo({ vehiculo, ordenes, onClose }: {
           {vehiculo.chasis && <span>VIN: <strong className="text-slate-700 font-mono">{vehiculo.chasis}</strong></span>}
         </div>
         <div className="flex-1 overflow-y-auto">
+          {/* DocumentArea for Printing hidden in normal view but visible in print */}
+          <div className="hidden">
+            <div id="print-area">
+              <DocumentoPDF 
+                tipo="historial" 
+                vehiculo={vehiculo} 
+                ordenes={ordenes} 
+              />
+            </div>
+          </div>
           {historial.length === 0 ? (
             <div className="py-12 text-center text-slate-400">
               <History size={32} className="mx-auto mb-2 opacity-20"/>
@@ -282,8 +303,9 @@ function ModalAgendarCita({ vehiculos, clienteId, onClose }: {
 function ServicioCard({ orden, vehiculo, onPagar }: {
   orden: OrdenTrabajo; vehiculo: Vehiculo | undefined; onPagar: () => void;
 }) {
-  const { rechazarCotizacion, aprobarCotizacion } = useApp();
+  const { rechazarCotizacion, aprobarCotizacion, clientes, facturas } = useApp();
   const [expanded, setExpanded] = useState(false);
+  const [showDocs, setShowDocs] = useState<{ tipo: 'cotizacion' | 'factura' | 'recepcion', orden: OrdenTrabajo } | null>(null);
   const cfg = ESTADO_CONFIG[orden.estado];
   const stepIdx = getStepIndex(orden.estado);
   const total = (orden.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0);
@@ -302,7 +324,15 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
             {isPendAprobacion && <span className="text-xs bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full font-bold">⚡ Tu aprobación</span>}
           </div>
           <p className="text-sm text-slate-600">{vehiculo?.placa} · {vehiculo?.marca} {vehiculo?.modelo} {vehiculo?.año}</p>
-          <p className="text-xs text-slate-400">{orden.fechaCreacion}</p>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-xs text-slate-400">{orden.fechaCreacion}</p>
+            <button 
+              onClick={(e) => { e.stopPropagation(); setShowDocs({ tipo: orden.estado === 'esperando_aprobacion' ? 'cotizacion' : (orden.estado === 'finalizada' ? 'factura' : 'recepcion'), orden }); }}
+              className="text-[10px] bg-white border border-slate-200 text-slate-500 px-2 py-0.5 rounded hover:bg-slate-50 flex items-center gap-1 font-bold"
+            >
+              <Printer size={10} /> Imprimir Doc.
+            </button>
+          </div>
         </div>
         {total > 0 && (
           <div className="text-right flex-shrink-0">
@@ -413,6 +443,30 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
           </>
         )}
 
+        {/* Modal Documento (Internal to ServicioCard) */}
+        {showDocs && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[95vh] flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-slate-50/50">
+                <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><Printer size={16}/> Comprobante TallerPro</p>
+                <div className="flex gap-2">
+                  <button onClick={() => window.print()} className="px-4 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800">Imprimir / PDF</button>
+                  <button onClick={() => setShowDocs(null)} className="p-1 px-2.5 text-slate-400 hover:text-slate-600 rounded-lg">✕</button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6 bg-slate-100/20">
+                <DocumentoPDF 
+                  tipo={showDocs.tipo} 
+                  orden={showDocs.orden} 
+                  cliente={clientes.find(c => c.id === showDocs.orden.clienteId)} 
+                  vehiculo={vehiculo} 
+                  factura={showDocs.orden.facturaId ? facturas.find(f => f.numero === showDocs.orden.facturaId) : undefined}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Factura */}
         {orden.estado === 'finalizada' && orden.facturaId && (
           <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
@@ -436,6 +490,8 @@ export default function ClientPortal() {
 
   const [historialVehiculo, setHistorialVehiculo] = useState<Vehiculo | null>(null);
   const [pagoOrden, setPagoOrden] = useState<OrdenTrabajo | null>(null);
+  const [showHistorial, setShowHistorial] = useState<Vehiculo | null>(null);
+  const [showDocs, setShowDocs] = useState<{ tipo: 'cotizacion' | 'factura' | 'recepcion', orden: OrdenTrabajo } | null>(null);
   const [showAgendarModal, setShowAgendarModal] = useState(false);
 
   const clienteActual = clientes.find(c => c.usuarioId === currentUser?.id || c.nombre === currentUser?.nombre);
@@ -676,9 +732,17 @@ export default function ClientPortal() {
                       </div>
 
                       {/* Servicios count */}
-                      <div className="text-right flex-shrink-0">
-                        <p className="font-bold text-slate-700 text-2xl">{vehOrdenes.length}</p>
-                        <p className="text-xs text-slate-400">órdenes</p>
+                      <div className="text-right flex-shrink-0 flex flex-col items-end gap-2">
+                        <div>
+                          <p className="font-bold text-slate-700 text-2xl">{vehOrdenes.length}</p>
+                          <p className="text-xs text-slate-400">órdenes</p>
+                        </div>
+                        <button
+                          onClick={() => setShowHistorial(v)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 border border-slate-700 text-white rounded-lg text-[10px] font-black uppercase hover:bg-slate-800 transition-all shadow-sm shadow-slate-100"
+                        >
+                          <FileText size={10} /> Historial
+                        </button>
                       </div>
                     </div>
 

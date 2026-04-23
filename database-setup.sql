@@ -246,6 +246,7 @@ ALTER TABLE clientes ENABLE ROW LEVEL SECURITY;
 
 CREATE INDEX IF NOT EXISTS idx_clientes_ci    ON clientes(ci)    WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_clientes_email ON clientes(email) WHERE deleted_at IS NULL AND email IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clientes_usuario_id_unique ON clientes(usuario_id);
 
 -- ─── 8. RPC: listar_clientes ─────────────────────────────
 CREATE OR REPLACE FUNCTION listar_clientes()
@@ -1436,6 +1437,21 @@ CREATE TABLE IF NOT EXISTS logs_auditoria (
 );
 ALTER TABLE logs_auditoria ENABLE ROW LEVEL SECURITY;
 
+-- ─── 31.1 TABLA: notificaciones ─────────────────────────
+CREATE TABLE IF NOT EXISTS notificaciones (
+  id                 UUID          DEFAULT gen_random_uuid() PRIMARY KEY,
+  fecha              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  tipo               VARCHAR(50)   NOT NULL,
+  titulo             VARCHAR(100)  NOT NULL,
+  mensaje            TEXT          NOT NULL,
+  leida              BOOLEAN       DEFAULT FALSE,
+  para_rol           TEXT[],
+  para_usuario_id    UUID          REFERENCES usuarios(id),
+  referencia_id      UUID,
+  referencia_tipo    VARCHAR(50)
+);
+ALTER TABLE notificaciones ENABLE ROW LEVEL SECURITY;
+
 -- ─── 32. TABLA: kardex ───────────────────────────────────
 CREATE TABLE IF NOT EXISTS kardex (
   id                 UUID          DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -1700,6 +1716,21 @@ BEGIN
             
             INSERT INTO logs_auditoria (usuario_id, usuario_nombre, accion, modulo, detalles, entidad_id, entidad_tipo)
             VALUES (COALESCE(NEW.creado_por, '00000000-0000-0000-0000-000000000000'::UUID), 'Sistema (Trigger)', 'CAMBIO_ESTADO_AUTO', 'Órdenes', detalles_txt, NEW.id, 'OrdenTrabajo');
+
+            -- Notificaciones Automáticas según el Estado
+            IF (NEW.estado = 'esperando_aprobacion') THEN
+                INSERT INTO notificaciones (tipo, titulo, mensaje, para_rol, para_usuario_id, referencia_id, referencia_tipo)
+                SELECT 'cotizacion_pendiente', 'Presupuesto Listo 📝', 'Se ha generado la cotización para tu vehículo. Revisa y aprueba para iniciar la reparación.', ARRAY['cliente'], c.usuario_id, NEW.id, 'OrdenTrabajo'
+                FROM clientes c WHERE c.id = NEW.cliente_id;
+            ELSIF (NEW.estado = 'liberada') THEN
+                INSERT INTO notificaciones (tipo, titulo, mensaje, para_rol, para_usuario_id, referencia_id, referencia_tipo)
+                SELECT 'orden_lista', '¡Vehículo Listo! 🚗✅', 'La reparación de tu vehículo ha finalizado. Puedes pasar a recogerlo.', ARRAY['cliente'], c.usuario_id, NEW.id, 'OrdenTrabajo'
+                FROM clientes c WHERE c.id = NEW.cliente_id;
+            ELSIF (NEW.estado = 'en_reparacion') THEN
+                INSERT INTO notificaciones (tipo, titulo, mensaje, para_rol, para_usuario_id, referencia_id, referencia_tipo)
+                SELECT 'pago_recibido', 'Reparación en Curso 🛠️', 'Hemos iniciado el trabajo en tu vehículo tras tu aprobación.', ARRAY['cliente'], c.usuario_id, NEW.id, 'OrdenTrabajo'
+                FROM clientes c WHERE c.id = NEW.cliente_id;
+            END IF;
         END IF;
 
         IF (OLD.datos->>'mecanicoId' <> NEW.datos->>'mecanicoId' OR (OLD.datos->>'mecanicoId' IS NULL AND NEW.datos->>'mecanicoId' IS NOT NULL)) THEN
@@ -1711,6 +1742,97 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_audit_orden_trabajo ON ordenes_trabajo;
 CREATE TRIGGER trg_audit_orden_trabajo
-AFTER UPDATE ON ordenes_trabajo
-FOR EACH ROW EXECUTE FUNCTION fn_audit_orden_trabajo();
+  AFTER UPDATE OF estado ON ordenes_trabajo
+  FOR EACH ROW
+  EXECUTE FUNCTION fn_audit_orden_trabajo();
+
+-- ─── 44. RPC: listar_notificaciones ──────────────────────
+CREATE OR REPLACE FUNCTION listar_notificaciones()
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(
+      json_build_object(
+        'id', id, 'fecha', fecha::TEXT, 'tipo', tipo, 'titulo', titulo,
+        'mensaje', mensaje, 'leida', leida, 'paraRol', para_rol,
+        'paraUsuarioId', para_usuario_id, 'referenciaId', referencia_id,
+        'referenciaTipo', referencia_tipo
+      ) ORDER BY fecha DESC
+    ) FROM notificaciones
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_notificaciones() TO anon, authenticated;
+
+-- ─── 45. RPC: crear_notificacion ────────────────────────
+CREATE OR REPLACE FUNCTION crear_notificacion(
+  p_tipo             TEXT,
+  p_titulo           TEXT,
+  p_mensaje          TEXT,
+  p_para_rol         TEXT[],
+  p_para_usuario_id  UUID DEFAULT NULL,
+  p_referencia_id    UUID DEFAULT NULL,
+  p_referencia_tipo  TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO notificaciones (tipo, titulo, mensaje, para_rol, para_usuario_id, referencia_id, referencia_tipo)
+  VALUES (p_tipo, p_titulo, p_mensaje, p_para_rol, p_para_usuario_id, p_referencia_id, p_referencia_tipo);
+  RETURN json_build_object('success', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION crear_notificacion(TEXT, TEXT, TEXT, TEXT[], UUID, UUID, TEXT) TO anon, authenticated;
+
+-- ─── 46. RPC: marcar_notificacion_leida ─────────────────
+CREATE OR REPLACE FUNCTION marcar_notificacion_leida(p_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE notificaciones SET leida = TRUE WHERE id = p_id;
+  RETURN json_build_object('success', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION marcar_notificacion_leida(UUID) TO anon, authenticated;
+
+-- ─── 47. RPC: marcar_todas_leidas ───────────────────────
+CREATE OR REPLACE FUNCTION marcar_todas_leidas(p_usuario_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE notificaciones SET leida = TRUE WHERE para_usuario_id = p_usuario_id;
+  RETURN json_build_object('success', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION marcar_todas_leidas(UUID) TO anon, authenticated;
+-- ─── 32. AUTO-RESERVACIÓN DE CLIENTE AL REGISTRAR USUARIO ────────
+-- Cada vez que se crea un usuario con rol 'cliente', se genera su perfil en la tabla clientes.
+
+CREATE OR REPLACE FUNCTION fn_auto_crear_cliente()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  IF NEW.rol = 'cliente' THEN
+    -- Insertamos el cliente. Proporcionamos '' en apellido para evitar error de NOT NULL
+    INSERT INTO clientes (nombre, apellido, email, telefono, ci, usuario_id)
+    VALUES (NEW.nombre, '', NEW.email, NEW.telefono, NEW.ci, NEW.id)
+    ON CONFLICT (usuario_id) DO NOTHING;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS tr_auto_crear_cliente ON usuarios;
+CREATE TRIGGER tr_auto_crear_cliente
+AFTER INSERT ON usuarios
+FOR EACH ROW
+EXECUTE FUNCTION fn_auto_crear_cliente();

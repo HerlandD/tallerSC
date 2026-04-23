@@ -268,8 +268,8 @@ interface AppContextType {
   addRepuesto: (r: Omit<Repuesto, 'id'>) => void;
   updateRepuesto: (id: string, r: Partial<Repuesto>) => void;
   deleteRepuesto: (id: string) => void;
-  registrarSalidaRepuesto: (repuestoId: string, cantidad: number, ordenId?: string) => boolean;
-  reservarRepuestos: (repuestosReservados: RepuestoUsado[], ordenId: string) => boolean;
+  registrarSalidaRepuesto: (repuestoId: string, cantidad: number, ordenId?: string) => Promise<boolean>;
+  reservarRepuestos: (repuestosReservados: RepuestoUsado[], ordenId: string) => Promise<boolean>;
   liberarReservas: (repuestosReservados: RepuestoUsado[], ordenId: string) => void;
   addStockRepuesto: (repuestoId: string, cantidad: number, costo?: number, proveedorId?: string) => void;
 
@@ -281,9 +281,9 @@ interface AppContextType {
   aprobarCotizacion: (ordenId: string) => Promise<void>;
 
   notificaciones: Notificacion[];
-  addNotificacion: (n: Omit<Notificacion, 'id' | 'fecha' | 'leida'>) => void;
-  marcarNotificacionLeida: (id: string) => void;
-  marcarTodasLeidas: () => void;
+  addNotificacion: (n: Omit<Notificacion, 'id' | 'fecha' | 'leida'>) => Promise<void>;
+  marcarNotificacionLeida: (id: string) => Promise<void>;
+  marcarTodasLeidas: () => Promise<void>;
 
   updateCatalogs: (c: Partial<Catalogs>) => void;
 }
@@ -447,6 +447,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     supabase.rpc('listar_repuestos').then(({ data }) => {
       if (Array.isArray(data)) setRepuestos(data as Repuesto[]);
+    });
+    supabase.rpc('listar_notificaciones').then(({ data }) => {
+      if (Array.isArray(data)) setNotificaciones(data as Notificacion[]);
     });
   }, [currentUser?.id]);
 
@@ -1018,14 +1021,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const addNotificacion = (n: Omit<Notificacion, 'id' | 'fecha' | 'leida'>) =>
-    setNotificaciones(prev => [...prev, { ...n, id: `n${Date.now()}`, fecha: new Date().toISOString(), leida: false }]);
+  const addNotificacion = async (n: Omit<Notificacion, 'id' | 'fecha' | 'leida'>) => {
+    const { error } = await supabase.rpc('crear_notificacion', {
+      p_tipo: n.tipo,
+      p_titulo: n.titulo,
+      p_mensaje: n.mensaje,
+      p_para_rol: n.paraRol,
+      p_para_usuario_id: n.paraUsuarioId || null,
+      p_referencia_id: n.referenciaId || null,
+      p_referencia_tipo: n.referenciaTipo || null
+    });
+    if (!error) {
+      const { data } = await supabase.rpc('listar_notificaciones');
+      if (Array.isArray(data)) setNotificaciones(data as Notificacion[]);
+    }
+  };
 
-  const marcarNotificacionLeida = (id: string) =>
-    setNotificaciones(prev => prev.map(n => n.id === id ? { ...n, leida: true } : n));
+  const marcarNotificacionLeida = async (id: string) => {
+    const { error } = await supabase.rpc('marcar_notificacion_leida', { p_id: id });
+    if (!error) {
+      setNotificaciones(prev => prev.map(n => n.id === id ? { ...n, leida: true } : n));
+    }
+  };
 
-  const marcarTodasLeidas = () =>
-    setNotificaciones(prev => prev.map(n => ({ ...n, leida: true })));
+  const marcarTodasLeidas = async () => {
+    if (!currentUser) return;
+    const { error } = await supabase.rpc('marcar_todas_leidas', { p_usuario_id: currentUser.id });
+    if (!error) {
+      setNotificaciones(prev => prev.map(n => ({ ...n, leida: true })));
+    }
+  };
 
   const updateCatalogs = (c: Partial<Catalogs>) => setCatalogs(p => ({ ...p, ...c }));
 

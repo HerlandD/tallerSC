@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Plus, Search, Pencil, Trash2, Car, X, AlertCircle, Loader2 } from 'lucide-react';
-import { useApp, Vehiculo } from '../context/AppContext';
+import { Plus, Search, Pencil, Trash2, Car, X, AlertCircle, Loader2, Printer, FileText } from 'lucide-react';
+import { useApp, Vehiculo, OrdenTrabajo } from '../context/AppContext';
+import DocumentoPDF from '../components/DocumentoPDF';
 
 type FormData = {
   clienteId: string; placa: string; marca: string; modelo: string;
@@ -19,7 +20,8 @@ const MARCAS = [
 ];
 
 export default function Vehicles() {
-  const { vehiculos, clientes, addVehiculo, updateVehiculo, deleteVehiculo, currentUser } = useApp();
+  const { vehiculos, clientes, ordenes, addVehiculo, updateVehiculo, deleteVehiculo, currentUser } = useApp();
+  const [showHistorial, setShowHistorial] = useState<Vehiculo | null>(null);
   const [search, setSearch]           = useState('');
   const [modalOpen, setModalOpen]     = useState(false);
   const [editId, setEditId]           = useState<string | null>(null);
@@ -188,6 +190,10 @@ export default function Vehicles() {
                   {canEdit && (
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-1 justify-end">
+                        <button onClick={() => setShowHistorial(v)}
+                          title="Ver Historial" className="p-1.5 text-gray-400 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors">
+                          <FileText size={15} />
+                        </button>
                         <button onClick={() => openEdit(v)}
                           className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                           <Pencil size={15} />
@@ -345,6 +351,46 @@ export default function Vehicles() {
                 {deleteLoading && <Loader2 size={14} className="animate-spin" />}
                 Eliminar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal Historial */}
+      {showHistorial && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[95vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between px-8 py-4 border-b border-gray-100 bg-slate-50/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-100 text-slate-600 rounded-xl">
+                  <FileText size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800">Historial del Vehículo</h3>
+                  <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Placa: {showHistorial.placa}</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-all shadow-lg"
+                >
+                  <Printer size={16} /> Imprimir / PDF
+                </button>
+                <button
+                  onClick={() => setShowHistorial(null)}
+                  className="p-2.5 text-slate-400 hover:text-slate-600 hover:bg-white border border-transparent hover:border-slate-100 rounded-xl transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto bg-slate-100/30 p-8 flex justify-center scrollbar-hide">
+              <DocumentoPDF 
+                tipo="historial" 
+                vehiculo={showHistorial}
+                cliente={clientes.find(c => c.id === showHistorial.clienteId)}
+                ordenes={ordenes.filter(o => o.vehiculoId === showHistorial.id)}
+              />
             </div>
           </div>
         </div>

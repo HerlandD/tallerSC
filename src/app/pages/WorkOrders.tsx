@@ -1,9 +1,9 @@
 import React, { useState, useRef } from 'react';
 import {
   Search, ClipboardList, X, Eye, CheckCircle, ThumbsUp, ThumbsDown,
-  UserCheck, ShieldCheck, Wrench, Package, ChevronRight, AlertTriangle,
-  Clock, Camera, Upload, ZoomIn, DollarSign, CreditCard, Plus,
-  User, Car, FileText, Lock, CheckSquare, AlertCircle, ArrowRight, Trash2, Info, Bell
+  User, Car, FileText, Lock, CheckSquare, AlertCircle, ArrowRight, Trash2, Info, Bell, Printer,
+  ChevronDown, ChevronUp, PrinterIcon, Receipt, Shield, UserCheck, ShieldCheck, Wrench, Package, ChevronRight, AlertTriangle,
+  Clock, Camera, Upload, ZoomIn, DollarSign, CreditCard, Plus
 } from 'lucide-react';
 import {
   useApp, OrdenTrabajo, EstadoOrden, LineaCotizacion,
@@ -11,6 +11,7 @@ import {
 } from '../context/AppContext';
 import { ESTADO_CONFIG } from './Dashboard';
 import { toast } from 'sonner';
+import DocumentoPDF from '../components/DocumentoPDF';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -445,11 +446,12 @@ function WizardNuevaOT({ onClose }: { onClose: () => void }) {
 // ─── Main WorkOrders Page ─────────────────────────────────────────────────────
 
 export default function WorkOrders() {
-  const { ordenes, clientes, vehiculos, usuarios, currentUser } = useApp();
+  const { ordenes, clientes, vehiculos, usuarios, facturas, currentUser } = useApp();
   const [search, setSearch] = useState('');
   const [filterEstado, setFilterEstado] = useState<string>('');
-  const [showWizard, setShowWizard] = useState(false);
   const [detailOrden, setDetailOrden] = useState<OrdenTrabajo | null>(null);
+  const [showWizard, setShowWizard] = useState(false);
+  const [showDocs, setShowDocs] = useState<{ tipo: 'cotizacion' | 'factura' | 'recepcion', orden: OrdenTrabajo } | null>(null);
 
   const isAsesor = currentUser?.rol === 'asesor';
   const isCliente = currentUser?.rol === 'cliente';
@@ -481,6 +483,7 @@ export default function WorkOrders() {
             orden={detailOrden}
             onClose={() => setDetailOrden(null)}
             currentUser={currentUser}
+            onPrint={(tipo, o) => setShowDocs({ tipo, orden: o })}
           />
         )}
       </>
@@ -676,7 +679,48 @@ export default function WorkOrders() {
           orden={detailOrden}
           onClose={() => setDetailOrden(null)}
           currentUser={currentUser}
+          onPrint={(tipo, o) => setShowDocs({ tipo, orden: o })}
         />
+      )}
+      {showDocs && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[95vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between px-8 py-4 border-b border-gray-100 bg-slate-50/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
+                  <Printer size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800">Vista de Impresión</h3>
+                  <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">TallerPro Document System</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-200"
+                >
+                  <Printer size={16} /> Imprimir / Guardar PDF
+                </button>
+                <button
+                  onClick={() => setShowDocs(null)}
+                  className="p-2.5 text-slate-400 hover:text-slate-600 hover:bg-white border border-transparent hover:border-slate-100 rounded-xl transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto bg-slate-100/30 p-8 flex justify-center scrollbar-hide">
+              <DocumentoPDF 
+                tipo={showDocs.tipo} 
+                orden={showDocs.orden} 
+                cliente={clientes.find(c => c.id === showDocs.orden.clienteId)}
+                vehiculo={vehiculos.find(v => v.id === showDocs.orden.vehiculoId)}
+                factura={showDocs.orden.facturaId ? facturas.find(f => f.numero === showDocs.orden.facturaId) : undefined}
+              />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -983,9 +1027,8 @@ function AdminReadOnlyPanel({ orden, totalCot, mecAsignado }: {
 
 // ─── Modal Detalle ─────────────────────────────────────────────────────────────
 
-function ModalDetalle({ orden, onClose, currentUser }: {
-  orden: OrdenTrabajo; onClose: () => void;
-  currentUser: ReturnType<typeof useApp>['currentUser'];
+function ModalDetalle({ orden, onClose, currentUser, onPrint }: {
+  orden: OrdenTrabajo; onClose: () => void; currentUser: any; onPrint?: (tipo: 'cotizacion' | 'factura' | 'recepcion', o: OrdenTrabajo) => void;
 }) {
   const { clientes, vehiculos, usuarios, repuestos, catalogs, updateOrden, deleteOrden,
     registrarSalidaRepuesto, reservarRepuestos, liberarReservas, addAuditoria, addFactura, updateFactura, rechazarCotizacion, addNotificacion } = useApp();
@@ -1053,6 +1096,14 @@ function ModalDetalle({ orden, onClose, currentUser }: {
               <span className="text-xs bg-slate-100 text-slate-500 border border-slate-200 px-2.5 py-1 rounded-full flex items-center gap-1">
                 <Lock size={10}/> Solo lectura
               </span>
+            )}
+            {onPrint && (
+              <button
+                onClick={() => onPrint(orden.estado === 'registrada' ? 'recepcion' : (['esperando_aprobacion', 'en_reparacion'].includes(orden.estado) ? 'cotizacion' : 'factura'), orden)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-slate-700 border border-slate-300 rounded-lg text-[10px] font-black uppercase hover:bg-slate-50 transition-all shadow-sm"
+              >
+                <Printer size={12} /> Imprimir
+              </button>
             )}
             <button onClick={onClose} className="p-1.5 hover:bg-gray-200 rounded-lg"><X size={16} className="text-gray-500" /></button>
           </div>
