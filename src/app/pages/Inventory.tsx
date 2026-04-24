@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Plus, Search, Pencil, Trash2, Package, AlertTriangle, X,
   ArrowDown, Truck, Mail, Phone, Tag, Bell, ImagePlus
@@ -18,17 +18,18 @@ const emptyProveedor: ProveedorForm = {
 };
 
 const categorias = ['Filtros', 'Frenos', 'Motor', 'Lubricantes', 'Suspensión', 'Eléctrico', 'Transmisión', 'Carrocería', 'Otro'];
-type Tab = 'repuestos' | 'proveedores';
+type Tab = 'repuestos' | 'proveedores' | 'alertas';
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function Inventory() {
   const [activeTab, setActiveTab] = useState<Tab>('repuestos');
+  const [alertas, setAlertas] = useState<Repuesto[]>([]);
   const {
     repuestos, proveedores,
     addRepuesto, updateRepuesto, deleteRepuesto,
     registrarSalidaRepuesto, addStockRepuesto,
     addProveedor, updateProveedor, deleteProveedor,
-    currentUser, kardex, addNotificacion
+    currentUser, kardex, addNotificacion, obtenerAlertasInventario
   } = useApp();
 
   const isAdmin = currentUser?.rol === 'administrador';
@@ -36,6 +37,14 @@ export default function Inventory() {
 
   const valorTotal = repuestos.reduce((s, r) => s + r.cantidad * r.precio, 0);
   const stockBajo = repuestos.filter(r => r.cantidad <= r.stockMinimo);
+
+  useEffect(() => {
+    const cargarAlertas = async () => {
+      const data = await obtenerAlertasInventario();
+      setAlertas(data);
+    };
+    cargarAlertas();
+  }, [obtenerAlertasInventario]);
 
   if (isMecanico) {
     return <MecanicoInventarioView repuestos={repuestos} addNotificacion={addNotificacion} currentUser={currentUser} />;
@@ -93,6 +102,12 @@ export default function Inventory() {
             <Package size={15} /> Repuestos ({repuestos.length})
           </button>
           {isAdmin && (
+            <button onClick={() => setActiveTab('alertas')}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'alertas' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>
+              <AlertTriangle size={15} /> Alertas ({alertas.length})
+            </button>
+          )}
+          {isAdmin && (
             <button onClick={() => setActiveTab('proveedores')}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'proveedores' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>
               <Truck size={15} /> Proveedores ({proveedores.length})
@@ -107,6 +122,9 @@ export default function Inventory() {
             deleteRepuesto={deleteRepuesto} registrarSalidaRepuesto={registrarSalidaRepuesto}
             addStockRepuesto={addStockRepuesto} showProveedorInfo={isAdmin}
           />
+        )}
+        {activeTab === 'alertas' && isAdmin && (
+          <AlertasPanel alertas={alertas} repuestos={repuestos} setActiveTab={setActiveTab} />
         )}
         {activeTab === 'proveedores' && isAdmin && (
           <ProveedoresPanel
@@ -552,8 +570,8 @@ function RepuestosPanel({
 // ─── ProveedoresPanel (Admin only) ────────────────────────────────────────────
 function ProveedoresPanel({ proveedores, canEdit, addProveedor, updateProveedor, deleteProveedor }: {
   proveedores: Proveedor[]; canEdit: boolean;
-  addProveedor: (p: Omit<Proveedor, 'id'>) => void;
-  updateProveedor: (id: string, p: Partial<Proveedor>) => void;
+  addProveedor: (p: Omit<Proveedor, 'id'>) => Promise<{ ok: boolean; error?: string }>;
+  updateProveedor: (id: string, p: Partial<Proveedor>) => Promise<{ ok: boolean; error?: string }>;
   deleteProveedor: (id: string) => void;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
@@ -562,14 +580,28 @@ function ProveedoresPanel({ proveedores, canEdit, addProveedor, updateProveedor,
 
   const openCreate = () => { setEditId(null); setForm({ ...emptyProveedor }); setModalOpen(true); };
   const openEdit = (p: Proveedor) => { setEditId(p.id); setForm({ ...p }); setModalOpen(true); };
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editId) { updateProveedor(editId, form); toast.success('Proveedor actualizado'); }
-    else { addProveedor(form); toast.success('Proveedor registrado'); }
+    if (editId) {
+      const result = await updateProveedor(editId, form);
+      if (result.ok) { toast.success('Proveedor actualizado'); }
+      else { toast.error(result.error || 'Error al actualizar proveedor'); return; }
+    } else {
+      const result = await addProveedor(form);
+      if (result.ok) { toast.success('Proveedor registrado'); }
+      else { toast.error(result.error || 'Error al registrar proveedor'); return; }
+    }
     setModalOpen(false);
   };
 
   const inCls = 'w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-white';
+
+  const handleToggleActivo = async (id: string, currentState: boolean) => {
+    const result = await updateProveedor(id, { activo: !currentState });
+    if (!result.ok) {
+      toast.error(result.error || 'Error al cambiar estado del proveedor');
+    }
+  };
 
   return (
     <>
@@ -603,7 +635,7 @@ function ProveedoresPanel({ proveedores, canEdit, addProveedor, updateProveedor,
                 <button onClick={() => openEdit(p)} className="flex items-center gap-1 text-xs text-cyan-600 hover:bg-cyan-50 px-2 py-1 rounded-lg">
                   <Pencil size={11} /> Editar
                 </button>
-                <button onClick={() => updateProveedor(p.id, { activo: !p.activo })} className="flex items-center gap-1 text-xs text-slate-500 hover:bg-slate-100 px-2 py-1 rounded-lg">
+                <button onClick={() => handleToggleActivo(p.id, p.activo)} className="flex items-center gap-1 text-xs text-slate-500 hover:bg-slate-100 px-2 py-1 rounded-lg">
                   {p.activo ? 'Desactivar' : 'Activar'}
                 </button>
               </div>
@@ -635,6 +667,99 @@ function ProveedoresPanel({ proveedores, canEdit, addProveedor, updateProveedor,
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+// ─── AlertasPanel (Admin only) ────────────────────────────────────────────
+function AlertasPanel({ alertas, repuestos, setActiveTab }: {
+  alertas: Repuesto[]; repuestos: Repuesto[];
+  setActiveTab: (tab: Tab) => void;
+}) {
+  const stockCritico = alertas.length;
+  const totalRepuestos = repuestos.length;
+  const porcentajeAlerta = totalRepuestos > 0 ? Math.round((stockCritico / totalRepuestos) * 100) : 0;
+
+  return (
+    <>
+      {stockCritico > 0 && (
+        <div className="mb-5 bg-red-50 border-l-4 border-red-500 rounded-lg p-5 flex items-start gap-3">
+          <AlertTriangle size={24} className="text-red-600 mt-0.5 flex-shrink-0" />
+          <div className="flex-1">
+            <h3 className="font-bold text-red-800 mb-1">Stock Crítico Detectado</h3>
+            <p className="text-sm text-red-700">{stockCritico} ítem{stockCritico > 1 ? 's' : ''} con stock disponible por debajo del mínimo requerido</p>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+        <div className="bg-white border border-red-200 rounded-xl p-4">
+          <p className="text-xs font-semibold text-red-600 uppercase mb-1">Stock Crítico</p>
+          <p className="text-2xl font-bold text-red-700">{stockCritico}</p>
+          <p className="text-xs text-slate-500 mt-1">{porcentajeAlerta}% del inventario</p>
+        </div>
+        <div className="bg-white border border-amber-200 rounded-xl p-4">
+          <p className="text-xs font-semibold text-amber-600 uppercase mb-1">Total en Alerta</p>
+          <p className="text-2xl font-bold text-amber-700">{totalRepuestos}</p>
+          <p className="text-xs text-slate-500 mt-1">Repuestos totales</p>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-xl p-4">
+          <p className="text-xs font-semibold text-slate-600 uppercase mb-1">Monitoreo</p>
+          <p className="text-2xl font-bold text-slate-700">✓</p>
+          <p className="text-xs text-slate-500 mt-1">Sistema activo</p>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <table className="w-full">
+          <thead>
+            <tr className="bg-slate-100 border-b border-slate-200">
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Repuesto</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Categoría</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Stock Disponible</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Stock Total</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Mínimo</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Acción</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {alertas.length === 0 ? (
+              <tr><td colSpan={6} className="py-12 text-center text-slate-400 text-sm">Sin alertas de stock crítico</td></tr>
+            ) : alertas.map(alerta => {
+              const disponible = alerta.cantidad - alerta.cantidadReservada;
+              return (
+                <tr key={alerta.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-4 py-3.5">
+                    <p className="text-sm font-semibold text-slate-800">{alerta.nombre}</p>
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{alerta.categoria}</span>
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <span className={`font-bold text-sm ${disponible <= 0 ? 'text-red-600' : 'text-amber-600'}`}>
+                      {disponible}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3.5 text-sm text-slate-600">
+                    {alerta.cantidad} un.
+                  </td>
+                  <td className="px-4 py-3.5 text-sm text-slate-600">
+                    {alerta.stockMinimo} un.
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <button
+                      onClick={() => setActiveTab('repuestos')}
+                      className="text-xs text-cyan-600 hover:bg-cyan-50 px-2 py-1 rounded-lg font-medium"
+                    >
+                      Ver Repuesto
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

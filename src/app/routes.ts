@@ -6,6 +6,7 @@ import Clients from './pages/Clients';
 import Vehicles from './pages/Vehicles';
 import WorkOrders from './pages/WorkOrders';
 import Diagnostico from './pages/Diagnostico';
+import ControlCalidad from './pages/ControlCalidad';
 import Inventory from './pages/Inventory';
 import ConfigSecurity from './pages/ConfigSecurity';
 import ClientPortal from './pages/ClientPortal';
@@ -34,6 +35,7 @@ export const router = createBrowserRouter([
       { path: 'vehiculos', Component: Vehicles },
       { path: 'ordenes', Component: WorkOrders },
       { path: 'diagnostico', Component: Diagnostico },
+      { path: 'control-calidad', Component: ControlCalidad },
       { path: 'inventario', Component: Inventory },
       { path: 'portal', Component: ClientPortal },
       { path: 'reportes', Component: Reportes },

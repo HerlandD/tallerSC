@@ -43,7 +43,8 @@ const navSections: NavSection[] = [
     items: [
       { label: 'Mis Órdenes', path: '/ordenes', icon: <ClipboardList size={16} />, roles: ['mecanico'] },
       { label: 'Diagnóstico', path: '/diagnostico', icon: <Wrench size={16} />, roles: ['mecanico'] },
-      { label: 'Inventario', path: '/inventario', icon: <Package size={16} />, roles: ['mecanico'] },
+      { label: 'Control de Calidad', path: '/control-calidad', icon: <ShieldCheck size={16} />, roles: ['jefe_taller'] },
+      { label: 'Inventario', path: '/inventario', icon: <Package size={16} />, roles: ['mecanico', 'jefe_taller'] },
     ],
   },
   {

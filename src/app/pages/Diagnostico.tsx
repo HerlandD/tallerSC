@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Wrench, Search, Save, Package, AlertCircle, CheckCircle, ArrowRight,
   Camera, Upload, ZoomIn, X, Plus, ChevronDown, ChevronUp,
@@ -246,10 +246,60 @@ function DiagnosticoPanel({
   addNotificacion: ReturnType<typeof useApp>['addNotificacion'];
   log: (a: string, d: string, id?: string) => void;
 }) {
+  const {
+    registrarNotaOT, adjuntarArchivoOT, finalizarReparacion,
+    notasOT, adjuntosOT, cargarNotasOT, cargarAdjuntosOT,
+  } = useApp();
+
   const cli = clientes.find(c => c.id === orden.clienteId);
   const veh = vehiculos.find(v => v.id === orden.vehiculoId);
   const mec = usuarios.find(u => u.id === orden.mecanicoId);
   const cfg = ESTADO_CONFIG[orden.estado];
+
+  const canEditReparacion = isMecanico && (
+    orden.mecanicoId === currentUser?.id ||
+    (orden.mecanicosIds ?? []).includes(currentUser?.id ?? '')
+  );
+
+  // ── Notas de progreso ──
+  const [nuevaNota, setNuevaNota] = useState('');
+  const [guardandoNota, setGuardandoNota] = useState(false);
+  const notasDeOrden = notasOT[orden.id] ?? [];
+
+  // ── Adjuntos ──
+  const adjuntosDeOrden = adjuntosOT[orden.id] ?? [];
+  const adjuntoRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (orden.estado === 'en_reparacion') {
+      cargarNotasOT(orden.id);
+      cargarAdjuntosOT(orden.id);
+    }
+  }, [orden.id, orden.estado]);
+
+  const handleAgregarNota = async () => {
+    if (!nuevaNota.trim()) return;
+    setGuardandoNota(true);
+    const res = await registrarNotaOT(orden.id, nuevaNota.trim());
+    if (res.ok) {
+      setNuevaNota('');
+      await cargarNotasOT(orden.id);
+      toast.success('Nota guardada');
+    } else {
+      toast.error(res.error ?? 'Error al guardar nota');
+    }
+    setGuardandoNota(false);
+  };
+
+  const handleAgregarAdjunto = async (files: FileList | null) => {
+    const base64s = await readFilesAsBase64(files);
+    for (const b64 of base64s) {
+      const res = await adjuntarArchivoOT(orden.id, b64);
+      if (!res.ok) { toast.error(res.error ?? 'Error al adjuntar imagen'); return; }
+    }
+    await cargarAdjuntosOT(orden.id);
+    toast.success(`${base64s.length} imagen(es) adjuntada(s)`);
+  };
 
   // ── Diagnóstico state ──
   const [diagnostico, setDiagnostico] = useState(orden.diagnostico || '');
@@ -699,6 +749,12 @@ function DiagnosticoPanel({
         {/* ═══════════════ REPARACIÓN (en_reparacion) ═══════════════ */}
         {orden.estado === 'en_reparacion' && (
           <>
+            {!canEditReparacion && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2 text-sm text-amber-700">
+                <AlertTriangle size={14} /> Solo el mecánico asignado puede editar esta orden
+              </div>
+            )}
+
             {/* QC rejection feedback */}
             {orden.controlCalidad && !orden.controlCalidad.aprobado && (
               <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4">
@@ -729,8 +785,9 @@ function DiagnosticoPanel({
             )}
 
             <Section num={1} title="Descripción de trabajos realizados *" color="orange">
-              <textarea value={reparacion} onChange={e => setReparacion(e.target.value)} rows={5}
-                className={`${taCls} focus:ring-orange-400`}
+              <textarea value={reparacion} onChange={e => canEditReparacion && setReparacion(e.target.value)} rows={5}
+                disabled={!canEditReparacion}
+                className={`${taCls} focus:ring-orange-400${!canEditReparacion ? ' bg-gray-50 cursor-not-allowed' : ''}`}
                 placeholder="Describe cada trabajo realizado:&#10;• Piezas cambiadas / reparadas&#10;• Procedimientos ejecutados&#10;• Resultado de cada intervención" />
             </Section>
 
@@ -749,39 +806,101 @@ function DiagnosticoPanel({
                   </div>
                 </div>
               )}
-              <div className="flex gap-2">
-                <select value={addRepUsId} onChange={e => setAddRepUsId(e.target.value)} className="flex-1 px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                  <option value="">Seleccionar repuesto...</option>
-                  {repuestos.map(r => <option key={r.id} value={r.id}>{r.nombre} (Stock: {r.cantidad}) — ${r.precio}/u</option>)}
-                </select>
-                <input type="number" value={addRepUsCant} onChange={e => setAddRepUsCant(Number(e.target.value))} min={1}
-                  className="w-16 px-2 py-2.5 border border-gray-300 rounded-xl text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <button onClick={handleAddRepUsado} className="px-3 py-2.5 bg-gray-800 text-white rounded-xl text-sm hover:bg-gray-700 font-medium">+</button>
-              </div>
+              {canEditReparacion && (
+                <div className="flex gap-2">
+                  <select value={addRepUsId} onChange={e => setAddRepUsId(e.target.value)} className="flex-1 px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">Seleccionar repuesto...</option>
+                    {repuestos.map(r => <option key={r.id} value={r.id}>{r.nombre} (Stock: {r.cantidad}) — ${r.precio}/u</option>)}
+                  </select>
+                  <input type="number" value={addRepUsCant} onChange={e => setAddRepUsCant(Number(e.target.value))} min={1}
+                    className="w-16 px-2 py-2.5 border border-gray-300 rounded-xl text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <button onClick={handleAddRepUsado} className="px-3 py-2.5 bg-gray-800 text-white rounded-xl text-sm hover:bg-gray-700 font-medium">+</button>
+                </div>
+              )}
             </Section>
 
-            <Section num={3} title="📸 Fotos de la reparación (OBLIGATORIO)" color="orange">
+            <Section num={3} title="Fotos de la reparación (OBLIGATORIO)" color="orange">
               <p className="text-xs text-gray-400">Fotografía el antes y después: piezas retiradas, proceso y resultado final</p>
-              {fotosRep.length > 0 && <PhotoGrid photos={fotosRep} onRemove={i => setFotosRep(prev => prev.filter((_, j) => j !== i))} />}
-              <input ref={fotoRepRef} type="file" accept="image/*" multiple className="hidden"
-                onChange={async e => { const n = await readFilesAsBase64(e.target.files); setFotosRep(prev => [...prev, ...n]); }} />
-              <button onClick={() => fotoRepRef.current?.click()}
-                className={`w-full mt-2 py-2.5 border-2 border-dashed rounded-xl text-sm flex items-center justify-center gap-2 ${fotosRep.length > 0 ? 'border-green-400 text-green-600 hover:bg-green-50' : 'border-orange-300 text-orange-600 hover:border-orange-400 bg-orange-50/30'}`}>
-                <Camera size={14} /> {fotosRep.length > 0 ? `${fotosRep.length} foto(s) · Agregar más` : 'Agregar fotos de la reparación'}
-              </button>
+              {fotosRep.length > 0 && <PhotoGrid photos={fotosRep} onRemove={canEditReparacion ? i => setFotosRep(prev => prev.filter((_, j) => j !== i)) : undefined} />}
+              {canEditReparacion && (
+                <>
+                  <input ref={fotoRepRef} type="file" accept="image/*" multiple className="hidden"
+                    onChange={async e => { const n = await readFilesAsBase64(e.target.files); setFotosRep(prev => [...prev, ...n]); }} />
+                  <button onClick={() => fotoRepRef.current?.click()}
+                    className={`w-full mt-2 py-2.5 border-2 border-dashed rounded-xl text-sm flex items-center justify-center gap-2 ${fotosRep.length > 0 ? 'border-green-400 text-green-600 hover:bg-green-50' : 'border-orange-300 text-orange-600 hover:border-orange-400 bg-orange-50/30'}`}>
+                    <Camera size={14} /> {fotosRep.length > 0 ? `${fotosRep.length} foto(s) · Agregar más` : 'Agregar fotos de la reparación'}
+                  </button>
+                </>
+              )}
             </Section>
 
-            <div className="flex gap-3 pt-2 border-t border-gray-100">
-              <button onClick={() => { updateOrden(orden.id, { reparacion, repuestosUsados: repUsados, fotosReparacion: fotosRep }); toast.success('Guardado'); }}
-                className="flex items-center gap-2 px-5 py-2.5 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
-                <Save size={14} /> Guardar
-              </button>
-              <button onClick={handleEnviarQC}
-                disabled={!reparacion.trim() || fotosRep.length === 0}
-                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold ${reparacion.trim() && fotosRep.length > 0 ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-                <ArrowRight size={15} /> Enviar a Control de Calidad
-              </button>
-            </div>
+            {/* ── Notas de avance ── */}
+            <Section num={4} title="Notas de avance" color="violet">
+              {notasDeOrden.length > 0 && (
+                <div className="space-y-2 mb-3">
+                  {notasDeOrden.map(n => (
+                    <div key={n.id} className="bg-violet-50 border border-violet-100 rounded-xl px-4 py-3">
+                      <p className="text-sm text-gray-800">{n.nota}</p>
+                      <p className="text-xs text-violet-500 mt-1">{n.autorNombre} · {new Date(n.fecha).toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {canEditReparacion && (
+                <div className="flex gap-2">
+                  <textarea value={nuevaNota} onChange={e => setNuevaNota(e.target.value)} rows={2}
+                    className={`${taCls} focus:ring-violet-500 flex-1`}
+                    placeholder="Escribe una nota de avance..." />
+                  <button onClick={handleAgregarNota} disabled={!nuevaNota.trim() || guardandoNota}
+                    className="px-4 py-2 bg-violet-600 text-white rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-40 self-end">
+                    <Plus size={14} />
+                  </button>
+                </div>
+              )}
+            </Section>
+
+            {/* ── Imágenes adjuntas ── */}
+            <Section num={5} title="Imágenes adjuntas" color="blue">
+              {adjuntosDeOrden.length > 0 && (
+                <PhotoGrid photos={adjuntosDeOrden.map(a => a.urlArchivo)} />
+              )}
+              {canEditReparacion && (
+                <>
+                  <input ref={adjuntoRef} type="file" accept="image/*" multiple className="hidden"
+                    onChange={e => handleAgregarAdjunto(e.target.files)} />
+                  <button onClick={() => adjuntoRef.current?.click()}
+                    className={`w-full mt-2 py-2.5 border-2 border-dashed rounded-xl text-sm flex items-center justify-center gap-2 ${adjuntosDeOrden.length > 0 ? 'border-blue-400 text-blue-600 hover:bg-blue-50' : 'border-gray-300 text-gray-500 hover:border-blue-400 hover:text-blue-600'}`}>
+                    <Upload size={14} /> {adjuntosDeOrden.length > 0 ? `${adjuntosDeOrden.length} imagen(es) · Agregar más` : 'Adjuntar imágenes'}
+                  </button>
+                </>
+              )}
+            </Section>
+
+            {canEditReparacion && (
+              <div className="flex gap-3 pt-2 border-t border-gray-100">
+                <button onClick={() => { updateOrden(orden.id, { reparacion, repuestosUsados: repUsados, fotosReparacion: fotosRep }); toast.success('Guardado'); }}
+                  className="flex items-center gap-2 px-5 py-2.5 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
+                  <Save size={14} /> Guardar
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!reparacion.trim()) { toast.error('Describe los trabajos realizados'); return; }
+                    if (fotosRep.length === 0) { toast.error('Las fotos de la reparación son obligatorias'); return; }
+                    await updateOrden(orden.id, { reparacion, repuestosUsados: repUsados, fotosReparacion: fotosRep });
+                    const res = await finalizarReparacion(orden.id);
+                    if (res.ok) {
+                      log('FINALIZAR_REPARACION', `Reparación completada en ${orden.numero}. OT → CONTROL_CALIDAD`, orden.id);
+                      toast.success('Reparación enviada a Control de Calidad');
+                    } else {
+                      toast.error(res.error ?? 'Error al finalizar reparación');
+                    }
+                  }}
+                  disabled={!reparacion.trim() || fotosRep.length === 0}
+                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold ${reparacion.trim() && fotosRep.length > 0 ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
+                  <ArrowRight size={15} /> Finalizar Reparación → QC
+                </button>
+              </div>
+            )}
           </>
         )}
 

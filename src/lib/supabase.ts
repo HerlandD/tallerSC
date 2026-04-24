@@ -81,3 +81,22 @@ export interface RegisterRpcResult {
   error?:  string
   user?:   RpcUser
 }
+
+export interface WorkOrderNote {
+  id: string; ordenId: string; autorId: string; autorNombre: string;
+  nota: string; fecha: string;
+}
+
+export interface WorkOrderAttachment {
+  id: string; ordenId: string; urlArchivo: string; fecha: string;
+}
+
+export interface WorkOrderQC {
+  id: string; ordenId: string; inspectorId: string; inspectorNombre: string;
+  aprobado: boolean; observaciones?: string; fecha: string;
+}
+
+export interface CobDiagnostico {
+  id: string; ordenId: string; clienteId: string;
+  monto: number; descripcion: string; estado: string; fecha: string;
+}

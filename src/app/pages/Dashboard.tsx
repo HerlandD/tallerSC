@@ -17,7 +17,8 @@ import { rolLabels, rolBadgeColors } from '../components/Layout';
 
 export const ESTADO_CONFIG: Record<EstadoOrden, { label: string; color: string; bg: string; dot: string; step: number }> = {
   registrada:              { label: 'Registrada',          color: 'text-gray-600',   bg: 'bg-gray-100',   dot: 'bg-gray-400',   step: 1 },
-  en_diagnostico:          { label: 'En Diagnóstico',      color: 'text-cyan-700',  bg: 'bg-cyan-50',  dot: 'bg-cyan-500',  step: 2 },
+  asignada:                { label: 'Asignada',            color: 'text-blue-700',   bg: 'bg-blue-50',    dot: 'bg-blue-500',   step: 2 },
+  en_diagnostico:          { label: 'En Diagnóstico',      color: 'text-cyan-700',  bg: 'bg-cyan-50',  dot: 'bg-cyan-500',  step: 3 },
   esperando_aprobacion:    { label: 'Esp. Aprobación',     color: 'text-orange-600', bg: 'bg-orange-50', dot: 'bg-orange-500',   step: 3 },
   en_reparacion:           { label: 'En Reparación',       color: 'text-cyan-700',  bg: 'bg-cyan-50',  dot: 'bg-cyan-500',  step: 4 },
   liquidacion_diagnostico: { label: 'Liq. Diagnóstico',   color: 'text-orange-600', bg: 'bg-orange-50', dot: 'bg-orange-500',     step: 0 },

@@ -1523,6 +1523,7 @@ CREATE TABLE IF NOT EXISTS repuestos (
   deleted_at         TIMESTAMPTZ
 );
 ALTER TABLE repuestos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE repuestos DROP CONSTRAINT IF EXISTS fk_repuesto_proveedor;
 ALTER TABLE repuestos ADD CONSTRAINT fk_repuesto_proveedor FOREIGN KEY (proveedor_id) REFERENCES proveedores(id) ON DELETE SET NULL;
 
 -- ─── 29. TABLA: ordenes_trabajo ──────────────────────────
@@ -2228,6 +2229,7 @@ AS $$
 DECLARE
   v_mecanico_id UUID;
   v_estado      TEXT;
+  v_deduccion   JSON;
 BEGIN
   SELECT mecanico_id, estado INTO v_mecanico_id, v_estado
   FROM ordenes_trabajo WHERE id = p_orden_id AND deleted_at IS NULL;
@@ -2242,6 +2244,12 @@ BEGIN
 
   IF v_mecanico_id IS DISTINCT FROM p_mecanico_id THEN
     RETURN json_build_object('ok', FALSE, 'error', 'Solo el mecánico asignado puede finalizar la reparación');
+  END IF;
+
+  -- Deducir repuestos reservados
+  SELECT deducir_repuestos_orden(p_orden_id) INTO v_deduccion;
+  IF (v_deduccion->>'ok')::BOOLEAN = FALSE THEN
+    RETURN v_deduccion;
   END IF;
 
   UPDATE ordenes_trabajo
@@ -2443,6 +2451,36 @@ END;
 $$;
 GRANT EXECUTE ON FUNCTION aprobar_cotizacion(UUID, UUID) TO anon, authenticated;
 
+-- ─── RPC: liberar_repuestos_orden ────────────────────────
+-- Libera repuestos reservados al rechazar cotización
+CREATE OR REPLACE FUNCTION liberar_repuestos_orden(p_orden_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_repuesto_id UUID;
+  v_cantidad_reservada INT;
+  v_repuesto_nombre VARCHAR(100);
+BEGIN
+  FOR v_repuesto_id, v_cantidad_reservada, v_repuesto_nombre IN
+    SELECT DISTINCT k.repuesto_id, k.cantidad, k.repuesto_nombre
+    FROM kardex k
+    WHERE k.orden_id = p_orden_id AND k.tipo = 'reserva' AND k.repuesto_id IS NOT NULL
+  LOOP
+    UPDATE repuestos
+    SET cantidad_reservada = GREATEST(cantidad_reservada - v_cantidad_reservada, 0)
+    WHERE id = v_repuesto_id;
+
+    INSERT INTO kardex (repuesto_id, repuesto_nombre, tipo, cantidad, stock_resultante, orden_id, observaciones)
+    VALUES (v_repuesto_id, v_repuesto_nombre, 'liberacion', v_cantidad_reservada,
+            (SELECT cantidad_reservada FROM repuestos WHERE id = v_repuesto_id), p_orden_id, 'Liberación por rechazo de cotización');
+  END LOOP;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION liberar_repuestos_orden(UUID) TO anon, authenticated;
+
 -- ─── RPC: rechazar_cotizacion ────────────────────────────────
 CREATE OR REPLACE FUNCTION rechazar_cotizacion(
   p_orden_id UUID,
@@ -2454,6 +2492,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
   v_veh_cliente UUID;
+  v_liberacion JSON;
 BEGIN
   -- Validar que el cliente es propietario del vehículo
   SELECT cliente_id INTO v_veh_cliente FROM ordenes_trabajo WHERE id = p_orden_id;
@@ -2468,6 +2507,12 @@ BEGIN
   -- Validar que la cotización está en estado pendiente
   IF EXISTS (SELECT 1 FROM ordenes_trabajo WHERE id = p_orden_id AND estado_cotizacion != 'pendiente') THEN
     RETURN json_build_object('ok', FALSE, 'error', 'Esta cotización ya fue procesada');
+  END IF;
+
+  -- Liberar repuestos reservados
+  SELECT liberar_repuestos_orden(p_orden_id) INTO v_liberacion;
+  IF (v_liberacion->>'ok')::BOOLEAN = FALSE THEN
+    RETURN v_liberacion;
   END IF;
 
   -- Actualizar cotización como rechazada
@@ -2605,3 +2650,71 @@ BEGIN
 END;
 $$;
 GRANT EXECUTE ON FUNCTION cerrar_orden(UUID, UUID) TO anon, authenticated;
+
+-- ─── RPC: deducir_repuestos_orden ─────────────────────────
+-- Descuento definitivo de repuestos reservados al finalizar reparación
+CREATE OR REPLACE FUNCTION deducir_repuestos_orden(
+  p_orden_id UUID
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_repuesto_id UUID;
+  v_cantidad_reservada INT;
+  v_stock_resultante INT;
+  v_repuesto_nombre VARCHAR(100);
+BEGIN
+  -- Iterar sobre todas las reservas de la orden
+  FOR v_repuesto_id, v_cantidad_reservada, v_repuesto_nombre IN
+    SELECT DISTINCT k.repuesto_id, k.cantidad, k.repuesto_nombre
+    FROM kardex k
+    WHERE k.orden_id = p_orden_id
+      AND k.tipo = 'reserva'
+      AND k.repuesto_id IS NOT NULL
+  LOOP
+    -- Actualizar stock en repuestos
+    UPDATE repuestos
+    SET cantidad = GREATEST(cantidad - v_cantidad_reservada, 0),
+        cantidad_reservada = GREATEST(cantidad_reservada - v_cantidad_reservada, 0)
+    WHERE id = v_repuesto_id;
+
+    -- Obtener stock resultante para kardex
+    SELECT GREATEST(cantidad - v_cantidad_reservada, 0) INTO v_stock_resultante
+    FROM repuestos WHERE id = v_repuesto_id;
+
+    -- Crear entrada en kardex de tipo 'salida'
+    INSERT INTO kardex (repuesto_id, repuesto_nombre, tipo, cantidad, stock_resultante, orden_id, observaciones)
+    VALUES (v_repuesto_id, v_repuesto_nombre, 'salida', v_cantidad_reservada, v_stock_resultante, p_orden_id, 'Descuento por finalización de reparación');
+  END LOOP;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION deducir_repuestos_orden(UUID) TO anon, authenticated;
+
+-- ─── RPC: obtener_alertas_inventario ──────────────────────
+-- Alertas críticas de inventario: stock_disponible <= stock_minimo
+CREATE OR REPLACE FUNCTION obtener_alertas_inventario()
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', r.id,
+      'nombre', r.nombre,
+      'categoria', r.categoria,
+      'stock_actual', r.cantidad,
+      'stock_reservado', r.cantidad_reservada,
+      'stock_disponible', r.cantidad - r.cantidad_reservada,
+      'stock_minimo', r.stock_minimo,
+      'proveedor_id', r.proveedor_id
+    ) ORDER BY (r.cantidad - r.cantidad_reservada) ASC)
+    FROM repuestos r
+    WHERE r.deleted_at IS NULL
+      AND (r.cantidad - r.cantidad_reservada) <= r.stock_minimo
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION obtener_alertas_inventario() TO anon, authenticated;

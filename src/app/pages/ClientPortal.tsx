@@ -299,6 +299,54 @@ function ModalAgendarCita({ vehiculos, clienteId, onClose }: {
   );
 }
 
+// ─── Modal Confirmar Acción ───────────────────────────────────────────────────
+function ModalConfirmarCotizacion({ orden, accion, onConfirm, onCancel }: {
+  orden: OrdenTrabajo; accion: 'aprobar' | 'rechazar';
+  onConfirm: () => void; onCancel: () => void;
+}) {
+  const total = (orden.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0);
+  const costoDx = orden.cotizacion?.costoDiagnostico || 0;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+        <div className={`px-6 py-4 ${accion === 'aprobar' ? 'bg-amber-600' : 'bg-red-600'}`}>
+          <h3 className="text-white font-bold text-lg">
+            {accion === 'aprobar' ? '✓ Aprobar Presupuesto' : '✕ Rechazar Presupuesto'}
+          </h3>
+        </div>
+        <div className="px-6 py-4 space-y-4">
+          {accion === 'aprobar' ? (
+            <div className="space-y-2">
+              <p className="text-sm text-slate-700"><strong>¿Deseas aprobar este presupuesto?</strong></p>
+              <p className="text-xs text-slate-500">Una vez aprobado, el taller iniciará la reparación de tu vehículo.</p>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mt-3">
+                <div className="flex justify-between text-sm mb-1"><span className="text-slate-600">Subtotal</span><span className="font-medium">${total.toFixed(2)}</span></div>
+                <div className="flex justify-between text-sm mb-2"><span className="text-slate-600">IVA 12%</span><span className="font-medium">${(total*0.12).toFixed(2)}</span></div>
+                <div className="border-t border-amber-200 pt-2 flex justify-between font-bold text-amber-800"><span>Total a pagar</span><span>${(total*1.12).toFixed(2)}</span></div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-slate-700"><strong>¿Deseas rechazar este presupuesto?</strong></p>
+              <p className="text-xs text-slate-500">Se generará un cobro por diagnóstico de <strong>${costoDx.toFixed(2)}</strong>. Esta acción es irreversible.</p>
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mt-3">
+                <p className="text-xs font-semibold text-red-800">Cobro por diagnóstico: <span className="text-red-700">${costoDx.toFixed(2)}</span></p>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="px-6 pb-6 flex gap-2">
+          <button onClick={onCancel} className="flex-1 py-2.5 bg-slate-100 text-slate-700 rounded-lg font-bold text-sm hover:bg-slate-200 transition-colors">Cancelar</button>
+          <button onClick={onConfirm} className={`flex-1 py-2.5 text-white rounded-lg font-bold text-sm transition-colors ${accion === 'aprobar' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-red-600 hover:bg-red-700'}`}>
+            {accion === 'aprobar' ? 'Aprobar' : 'Rechazar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Service Card (OT) ────────────────────────────────────────────────────────
 function ServicioCard({ orden, vehiculo, onPagar }: {
   orden: OrdenTrabajo; vehiculo: Vehiculo | undefined; onPagar: () => void;
@@ -306,9 +354,11 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
   const { rechazarCotizacion, aprobarCotizacion, clientes, facturas } = useApp();
   const [expanded, setExpanded] = useState(false);
   const [showDocs, setShowDocs] = useState<{ tipo: 'cotizacion' | 'factura' | 'recepcion', orden: OrdenTrabajo } | null>(null);
+  const [confirmCotizacion, setConfirmCotizacion] = useState<'aprobar' | 'rechazar' | null>(null);
   const cfg = ESTADO_CONFIG[orden.estado];
   const stepIdx = getStepIndex(orden.estado);
   const total = (orden.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0);
+  const costoDx = orden.cotizacion?.costoDiagnostico || 0;
   const isLista = orden.estado === 'liberada';
   const isPendAprobacion = orden.estado === 'esperando_aprobacion';
 
@@ -402,21 +452,14 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
               <div className="flex justify-between font-bold text-amber-800 text-sm"><span>Total</span><span>${(total*1.12).toFixed(2)}</span></div>
             </div>
             <div className="flex gap-2 mt-2 pt-2 border-t border-amber-200">
-              <button 
-                onClick={() => {
-                  const m = prompt('Motivo del rechazo (opcional):');
-                  rechazarCotizacion(orden.id, m || undefined);
-                  toast.info('Cotización rechazada. Se ha generado un cobro por diagnóstico.');
-                }}
+              <button
+                onClick={() => setConfirmCotizacion('rechazar')}
                 className="flex-1 py-1.5 bg-white text-red-600 border border-red-200 rounded-lg text-[10px] font-bold hover:bg-red-50 transition-colors"
               >
                 Rechazar
               </button>
-              <button 
-                onClick={() => {
-                  aprobarCotizacion(orden.id);
-                  toast.success('¡Cotización aprobada! El taller iniciará la reparación.');
-                }}
+              <button
+                onClick={() => setConfirmCotizacion('aprobar')}
                 className="flex-1 py-1.5 bg-amber-500 text-white rounded-lg text-[10px] font-bold hover:bg-amber-600 transition-colors shadow-sm"
               >
                 Aprobar Presupuesto
@@ -477,6 +520,25 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
           </div>
         )}
       </div>
+
+      {/* Modal Confirmar Cotización */}
+      {confirmCotizacion && (
+        <ModalConfirmarCotizacion
+          orden={orden}
+          accion={confirmCotizacion}
+          onConfirm={() => {
+            if (confirmCotizacion === 'aprobar') {
+              aprobarCotizacion(orden.id);
+              toast.success('¡Cotización aprobada! El taller iniciará la reparación.');
+            } else {
+              rechazarCotizacion(orden.id, costoDx);
+              toast.info('Cotización rechazada. Se ha generado un cobro por diagnóstico.');
+            }
+            setConfirmCotizacion(null);
+          }}
+          onCancel={() => setConfirmCotizacion(null)}
+        />
+      )}
     </div>
   );
 }

@@ -281,6 +281,7 @@ interface AppContextType {
   reservarRepuestos: (repuestosReservados: RepuestoUsado[], ordenId: string) => Promise<boolean>;
   liberarReservas: (repuestosReservados: RepuestoUsado[], ordenId: string) => void;
   addStockRepuesto: (repuestoId: string, cantidad: number, costo?: number, proveedorId?: string) => void;
+  obtenerAlertasInventario: () => Promise<Repuesto[]>;
 
   addKardex: (m: Omit<MovimientoKardex, 'id'>) => void;
   addAuditoria: (log: Omit<LogAuditoria, 'id'>) => void;
@@ -975,6 +976,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const obtenerAlertasInventario = async (): Promise<Repuesto[]> => {
+    const { data, error } = await supabase.rpc('obtener_alertas_inventario');
+    if (error) return [];
+    if (!Array.isArray(data)) return [];
+    return data.map((a: any) => ({
+      id: a.id,
+      nombre: a.nombre,
+      categoria: a.categoria,
+      cantidad: a.stock_actual,
+      cantidadReservada: a.stock_reservado,
+      costo: 0,
+      margenGanancia: 0,
+      precio: 0,
+      stockMinimo: a.stock_minimo,
+      proveedorId: a.proveedor_id,
+      imagen: ''
+    }));
+  };
+
   const addKardex = (m: Omit<MovimientoKardex, 'id'>) =>
     setKardex(prev => [...prev, { ...m, id: `k${Date.now()}` }]);
 
@@ -1162,7 +1182,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addProveedor, updateProveedor, deleteProveedor,
       addOrden, updateOrden, deleteOrden, cargarOrdenesPorEstado, cerrarOrden,
       addRepuesto, updateRepuesto, deleteRepuesto,
-      registrarSalidaRepuesto, reservarRepuestos, liberarReservas, addStockRepuesto,
+      registrarSalidaRepuesto, reservarRepuestos, liberarReservas, addStockRepuesto, obtenerAlertasInventario,
       addKardex, addAuditoria, addFactura, updateFactura, rechazarCotizacion, aprobarCotizacion,
       notificaciones, addNotificacion, marcarNotificacionLeida, marcarTodasLeidas,
       updateCatalogs,
