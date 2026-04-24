@@ -1681,6 +1681,118 @@ END;
 $$;
 GRANT EXECUTE ON FUNCTION actualizar_repuesto(UUID, INT, INT) TO anon, authenticated;
 
+-- ─── 41a. RPC: crear_repuesto ────────────────────────────
+CREATE OR REPLACE FUNCTION crear_repuesto(
+  p_nombre VARCHAR,
+  p_categoria VARCHAR,
+  p_costo DECIMAL,
+  p_margen_ganancia DECIMAL,
+  p_cantidad INT DEFAULT 0,
+  p_stock_minimo INT DEFAULT 1,
+  p_proveedor_id UUID DEFAULT NULL,
+  p_imagen TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_repuesto_id UUID;
+  v_precio DECIMAL;
+  v_categoria_valida BOOLEAN;
+BEGIN
+  -- Validar categoría
+  v_categoria_valida := p_categoria IN (
+    'Filtros', 'Frenos', 'Motor', 'Lubricantes', 'Suspensión',
+    'Eléctrico', 'Transmisión', 'Carrocería', 'Otro'
+  );
+  IF NOT v_categoria_valida THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Categoría inválida');
+  END IF;
+
+  -- Validar costo y margen
+  IF p_costo <= 0 THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Costo debe ser mayor a 0');
+  END IF;
+  IF p_margen_ganancia < 0 THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Margen no puede ser negativo');
+  END IF;
+
+  -- Calcular precio
+  v_precio := p_costo * (1 + p_margen_ganancia / 100);
+
+  -- Insertar repuesto
+  INSERT INTO repuestos (nombre, categoria, cantidad, costo, margen_ganancia, precio, stock_minimo, proveedor_id, imagen)
+  VALUES (p_nombre, p_categoria, p_cantidad, p_costo, p_margen_ganancia, v_precio, p_stock_minimo, p_proveedor_id, p_imagen)
+  RETURNING id INTO v_repuesto_id;
+
+  -- Si hay cantidad inicial, registrar entrada en kardex
+  IF p_cantidad > 0 THEN
+    INSERT INTO kardex (repuesto_id, repuesto_nombre, tipo, cantidad, stock_resultante, usuario_id, usuario_nombre)
+    VALUES (v_repuesto_id, p_nombre, 'entrada', p_cantidad, p_cantidad, NULL, 'Sistema');
+  END IF;
+
+  -- Retornar repuesto creado
+  RETURN json_build_object(
+    'ok', TRUE,
+    'repuesto', json_build_object(
+      'id', v_repuesto_id,
+      'nombre', p_nombre,
+      'categoria', p_categoria,
+      'cantidad', p_cantidad,
+      'cantidadReservada', 0,
+      'costo', p_costo,
+      'margenGanancia', p_margen_ganancia,
+      'precio', v_precio,
+      'stockMinimo', p_stock_minimo,
+      'proveedorId', p_proveedor_id,
+      'imagen', p_imagen
+    )
+  );
+END;
+$$;
+GRANT EXECUTE ON FUNCTION crear_repuesto(VARCHAR, VARCHAR, DECIMAL, DECIMAL, INT, INT, UUID, TEXT) TO anon, authenticated;
+
+-- ─── 41b. RPC: listar_repuestos_por_categoria ───────────
+CREATE OR REPLACE FUNCTION listar_repuestos_por_categoria(p_categoria TEXT DEFAULT NULL)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF p_categoria IS NOT NULL THEN
+    RETURN COALESCE((
+      SELECT json_agg(
+        json_build_object(
+          'id', id, 'nombre', nombre, 'categoria', categoria,
+          'cantidad', cantidad, 'cantidadReservada', cantidad_reservada,
+          'costo', costo, 'margenGanancia', margen_ganancia,
+          'precio', precio, 'stockMinimo', stock_minimo,
+          'proveedorId', proveedor_id, 'imagen', imagen
+        )
+        ORDER BY nombre
+      )
+      FROM repuestos
+      WHERE categoria = p_categoria AND deleted_at IS NULL
+    ), '[]'::json);
+  ELSE
+    RETURN COALESCE((
+      SELECT json_agg(
+        json_build_object(
+          'id', id, 'nombre', nombre, 'categoria', categoria,
+          'cantidad', cantidad, 'cantidadReservada', cantidad_reservada,
+          'costo', costo, 'margenGanancia', margen_ganancia,
+          'precio', precio, 'stockMinimo', stock_minimo,
+          'proveedorId', proveedor_id, 'imagen', imagen
+        )
+        ORDER BY nombre
+      )
+      FROM repuestos
+      WHERE deleted_at IS NULL
+    ), '[]'::json);
+  END IF;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_repuestos_por_categoria(TEXT) TO anon, authenticated;
+
 -- ─── 42. RPC: registrar_movimiento_kardex ────────────────
 CREATE OR REPLACE FUNCTION registrar_movimiento_kardex(
   p_repuesto_id      UUID,
@@ -1836,3 +1948,523 @@ CREATE TRIGGER tr_auto_crear_cliente
 AFTER INSERT ON usuarios
 FOR EACH ROW
 EXECUTE FUNCTION fn_auto_crear_cliente();
+
+-- =========================================================
+-- HU-2.4: Notas y adjuntos de progreso en OT
+-- =========================================================
+
+-- ─── TABLA: work_order_notes ──────────────────────────────
+CREATE TABLE IF NOT EXISTS work_order_notes (
+  id        UUID         DEFAULT gen_random_uuid() PRIMARY KEY,
+  order_id  UUID         NOT NULL REFERENCES ordenes_trabajo(id),
+  autor_id  UUID         NOT NULL REFERENCES usuarios(id),
+  nota      TEXT         NOT NULL,
+  fecha     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+ALTER TABLE work_order_notes ENABLE ROW LEVEL SECURITY;
+
+-- ─── TABLA: work_order_attachments ───────────────────────
+CREATE TABLE IF NOT EXISTS work_order_attachments (
+  id          UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  order_id    UUID        NOT NULL REFERENCES ordenes_trabajo(id),
+  url_archivo TEXT        NOT NULL,
+  fecha       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE work_order_attachments ENABLE ROW LEVEL SECURITY;
+
+-- ─── RPC: registrar_nota_ot ───────────────────────────────
+CREATE OR REPLACE FUNCTION registrar_nota_ot(
+  p_orden_id UUID,
+  p_autor_id UUID,
+  p_nota     TEXT
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_mecanico_id UUID;
+  v_estado      TEXT;
+BEGIN
+  SELECT mecanico_id, estado INTO v_mecanico_id, v_estado
+  FROM ordenes_trabajo WHERE id = p_orden_id AND deleted_at IS NULL;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Orden no encontrada');
+  END IF;
+
+  IF v_estado NOT IN ('en_reparacion', 'en_diagnostico') THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'La orden no está en un estado activo');
+  END IF;
+
+  IF v_mecanico_id IS DISTINCT FROM p_autor_id THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Solo el mecánico asignado puede registrar notas');
+  END IF;
+
+  INSERT INTO work_order_notes (order_id, autor_id, nota)
+  VALUES (p_orden_id, p_autor_id, p_nota);
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION registrar_nota_ot(UUID, UUID, TEXT) TO anon, authenticated;
+
+-- ─── RPC: adjuntar_archivo_ot ─────────────────────────────
+CREATE OR REPLACE FUNCTION adjuntar_archivo_ot(
+  p_orden_id    UUID,
+  p_usuario_id  UUID,
+  p_url_archivo TEXT
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_mecanico_id UUID;
+  v_estado      TEXT;
+BEGIN
+  SELECT mecanico_id, estado INTO v_mecanico_id, v_estado
+  FROM ordenes_trabajo WHERE id = p_orden_id AND deleted_at IS NULL;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Orden no encontrada');
+  END IF;
+
+  IF v_estado NOT IN ('en_reparacion', 'en_diagnostico') THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'La orden no está en un estado activo');
+  END IF;
+
+  IF v_mecanico_id IS DISTINCT FROM p_usuario_id THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Solo el mecánico asignado puede adjuntar archivos');
+  END IF;
+
+  INSERT INTO work_order_attachments (order_id, url_archivo)
+  VALUES (p_orden_id, p_url_archivo);
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION adjuntar_archivo_ot(UUID, UUID, TEXT) TO anon, authenticated;
+
+-- ─── RPC: iniciar_reparacion ──────────────────────────────
+CREATE OR REPLACE FUNCTION iniciar_reparacion(
+  p_orden_id    UUID,
+  p_mecanico_id UUID
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_mecanico_id UUID;
+  v_estado      TEXT;
+BEGIN
+  SELECT mecanico_id, estado INTO v_mecanico_id, v_estado
+  FROM ordenes_trabajo WHERE id = p_orden_id AND deleted_at IS NULL;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Orden no encontrada');
+  END IF;
+
+  IF v_estado != 'esperando_aprobacion' THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'La orden debe estar en esperando_aprobacion');
+  END IF;
+
+  IF v_mecanico_id IS DISTINCT FROM p_mecanico_id THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Solo el mecánico asignado puede iniciar la reparación');
+  END IF;
+
+  UPDATE ordenes_trabajo
+  SET estado = 'en_reparacion', fecha_actualizacion = CURRENT_DATE
+  WHERE id = p_orden_id;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION iniciar_reparacion(UUID, UUID) TO anon, authenticated;
+
+-- ─── RPC: finalizar_reparacion ────────────────────────────
+CREATE OR REPLACE FUNCTION finalizar_reparacion(
+  p_orden_id    UUID,
+  p_mecanico_id UUID
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_mecanico_id UUID;
+  v_estado      TEXT;
+BEGIN
+  SELECT mecanico_id, estado INTO v_mecanico_id, v_estado
+  FROM ordenes_trabajo WHERE id = p_orden_id AND deleted_at IS NULL;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Orden no encontrada');
+  END IF;
+
+  IF v_estado != 'en_reparacion' THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'La orden debe estar en en_reparacion');
+  END IF;
+
+  IF v_mecanico_id IS DISTINCT FROM p_mecanico_id THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Solo el mecánico asignado puede finalizar la reparación');
+  END IF;
+
+  UPDATE ordenes_trabajo
+  SET estado = 'control_calidad', fecha_actualizacion = CURRENT_DATE
+  WHERE id = p_orden_id;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION finalizar_reparacion(UUID, UUID) TO anon, authenticated;
+
+-- ─── RPC: listar_notas_ot ────────────────────────────────
+CREATE OR REPLACE FUNCTION listar_notas_ot(p_orden_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', n.id, 'ordenId', n.order_id, 'autorId', n.autor_id,
+      'autorNombre', u.nombre, 'nota', n.nota, 'fecha', n.fecha
+    ) ORDER BY n.fecha ASC)
+    FROM work_order_notes n
+    JOIN usuarios u ON u.id = n.autor_id
+    WHERE n.order_id = p_orden_id
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_notas_ot(UUID) TO anon, authenticated;
+
+-- ─── RPC: listar_adjuntos_ot ──────────────────────────────
+CREATE OR REPLACE FUNCTION listar_adjuntos_ot(p_orden_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', id, 'ordenId', order_id, 'urlArchivo', url_archivo, 'fecha', fecha
+    ) ORDER BY fecha ASC)
+    FROM work_order_attachments
+    WHERE order_id = p_orden_id
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_adjuntos_ot(UUID) TO anon, authenticated;
+
+-- =========================================================
+-- HU-2.5: Control de Calidad (QC)
+-- =========================================================
+
+-- ─── TABLA: work_order_qc ────────────────────────────────
+CREATE TABLE IF NOT EXISTS work_order_qc (
+  id             UUID         DEFAULT gen_random_uuid() PRIMARY KEY,
+  order_id       UUID         NOT NULL REFERENCES ordenes_trabajo(id),
+  inspector_id   UUID         NOT NULL REFERENCES usuarios(id),
+  aprobado       BOOLEAN      NOT NULL,
+  observaciones  TEXT,
+  fecha          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+ALTER TABLE work_order_qc ENABLE ROW LEVEL SECURITY;
+
+-- ─── RPC: registrar_qc ───────────────────────────────────
+CREATE OR REPLACE FUNCTION registrar_qc(
+  p_orden_id      UUID,
+  p_inspector_id  UUID,
+  p_aprobado      BOOLEAN,
+  p_observaciones TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_rol           TEXT;
+  v_estado        TEXT;
+  v_nuevo_estado  TEXT;
+BEGIN
+  SELECT rol INTO v_rol FROM usuarios WHERE id = p_inspector_id;
+  IF v_rol != 'jefe' THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Solo el Jefe de Taller puede aprobar/rechazar QC');
+  END IF;
+
+  SELECT estado INTO v_estado FROM ordenes_trabajo WHERE id = p_orden_id AND deleted_at IS NULL;
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Orden no encontrada');
+  END IF;
+
+  IF v_estado != 'control_calidad' THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'La orden no está en control_calidad');
+  END IF;
+
+  IF NOT p_aprobado AND (p_observaciones IS NULL OR p_observaciones = '') THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Las observaciones son obligatorias si se rechaza');
+  END IF;
+
+  v_nuevo_estado := CASE WHEN p_aprobado THEN 'liberada' ELSE 'en_reparacion' END;
+
+  INSERT INTO work_order_qc (order_id, inspector_id, aprobado, observaciones)
+  VALUES (p_orden_id, p_inspector_id, p_aprobado, p_observaciones);
+
+  UPDATE ordenes_trabajo
+  SET estado = v_nuevo_estado, fecha_actualizacion = CURRENT_DATE,
+      datos_json = CASE WHEN p_aprobado
+        THEN (datos_json || jsonb_build_object('controlCalidad', jsonb_build_object(
+          'aprobado', TRUE, 'observaciones', COALESCE(p_observaciones, ''), 'responsableId', p_inspector_id::TEXT)))
+        ELSE (datos_json || jsonb_build_object('controlCalidad', jsonb_build_object(
+          'aprobado', FALSE, 'observaciones', COALESCE(p_observaciones, ''), 'responsableId', p_inspector_id::TEXT)))
+        END
+  WHERE id = p_orden_id;
+
+  RETURN json_build_object('ok', TRUE, 'nuevoEstado', v_nuevo_estado);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION registrar_qc(UUID, UUID, BOOLEAN, TEXT) TO anon, authenticated;
+
+-- ─── RPC: listar_qc_ot ───────────────────────────────────
+CREATE OR REPLACE FUNCTION listar_qc_ot(p_orden_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', q.id, 'ordenId', q.order_id, 'inspectorId', q.inspector_id,
+      'inspectorNombre', q.nombre, 'aprobado', q.aprobado, 'observaciones', q.observaciones,
+      'fecha', q.fecha
+    ))
+    FROM (
+      SELECT q.*, u.nombre
+      FROM work_order_qc q
+      JOIN usuarios u ON u.id = q.inspector_id
+      WHERE q.order_id = p_orden_id
+      ORDER BY q.fecha DESC LIMIT 1
+    ) q
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_qc_ot(UUID) TO anon, authenticated;
+
+-- =========================================================
+-- HU-2.6: Aprobación o Rechazo de Cotización
+-- =========================================================
+
+-- ─── ALTER TABLE: agregar estado_cotizacion a ordenes_trabajo ─
+ALTER TABLE ordenes_trabajo ADD COLUMN IF NOT EXISTS estado_cotizacion VARCHAR(20) DEFAULT 'pendiente'
+  CHECK (estado_cotizacion IN ('pendiente', 'aprobada', 'rechazada'));
+
+-- ─── TABLA: cobros_diagnostico ───────────────────────────────
+CREATE TABLE IF NOT EXISTS cobros_diagnostico (
+  id              UUID         DEFAULT gen_random_uuid() PRIMARY KEY,
+  orden_id        UUID         NOT NULL REFERENCES ordenes_trabajo(id),
+  cliente_id      UUID         NOT NULL REFERENCES clientes(id),
+  monto           DECIMAL(10,2) NOT NULL,
+  descripcion     TEXT         NOT NULL DEFAULT 'Cobro por diagnóstico',
+  estado          VARCHAR(20)  NOT NULL DEFAULT 'pendiente'
+                                CHECK (estado IN ('pendiente', 'pagado')),
+  fecha           TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+ALTER TABLE cobros_diagnostico ENABLE ROW LEVEL SECURITY;
+
+-- ─── RPC: aprobar_cotizacion ─────────────────────────────────
+CREATE OR REPLACE FUNCTION aprobar_cotizacion(
+  p_orden_id UUID,
+  p_cliente_id UUID
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_estado TEXT;
+  v_veh_cliente UUID;
+BEGIN
+  -- Obtener orden y validar existencia
+  SELECT estado INTO v_estado FROM ordenes_trabajo WHERE id = p_orden_id AND deleted_at IS NULL;
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Orden no encontrada');
+  END IF;
+
+  -- Validar que el cliente es propietario del vehículo
+  SELECT cliente_id INTO v_veh_cliente FROM ordenes_trabajo WHERE id = p_orden_id;
+  IF v_veh_cliente != p_cliente_id THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'No tienes permiso para aprobar esta cotización');
+  END IF;
+
+  -- Validar que la cotización está en estado pendiente
+  IF EXISTS (SELECT 1 FROM ordenes_trabajo WHERE id = p_orden_id AND estado_cotizacion != 'pendiente') THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Esta cotización ya fue procesada');
+  END IF;
+
+  -- Actualizar cotización como aprobada
+  UPDATE ordenes_trabajo
+  SET estado_cotizacion = 'aprobada',
+      estado = 'en_reparacion',
+      fecha_actualizacion = CURRENT_DATE
+  WHERE id = p_orden_id;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION aprobar_cotizacion(UUID, UUID) TO anon, authenticated;
+
+-- ─── RPC: rechazar_cotizacion ────────────────────────────────
+CREATE OR REPLACE FUNCTION rechazar_cotizacion(
+  p_orden_id UUID,
+  p_cliente_id UUID,
+  p_monto_diagnostico DECIMAL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_veh_cliente UUID;
+BEGIN
+  -- Validar que el cliente es propietario del vehículo
+  SELECT cliente_id INTO v_veh_cliente FROM ordenes_trabajo WHERE id = p_orden_id;
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Orden no encontrada');
+  END IF;
+
+  IF v_veh_cliente != p_cliente_id THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'No tienes permiso para rechazar esta cotización');
+  END IF;
+
+  -- Validar que la cotización está en estado pendiente
+  IF EXISTS (SELECT 1 FROM ordenes_trabajo WHERE id = p_orden_id AND estado_cotizacion != 'pendiente') THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Esta cotización ya fue procesada');
+  END IF;
+
+  -- Actualizar cotización como rechazada
+  UPDATE ordenes_trabajo
+  SET estado_cotizacion = 'rechazada',
+      fecha_actualizacion = CURRENT_DATE
+  WHERE id = p_orden_id;
+
+  -- Generar cobro por diagnóstico
+  INSERT INTO cobros_diagnostico (orden_id, cliente_id, monto, descripcion, estado)
+  VALUES (p_orden_id, p_cliente_id, p_monto_diagnostico, 'Cobro por diagnóstico', 'pendiente');
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION rechazar_cotizacion(UUID, UUID, DECIMAL) TO anon, authenticated;
+
+-- =========================================================
+-- HU-2.7: Seguimiento y Cierre de Orden
+-- =========================================================
+
+-- ─── ALTER TABLE: agregar fecha_cierre a ordenes_trabajo ───
+ALTER TABLE ordenes_trabajo ADD COLUMN IF NOT EXISTS fecha_cierre TIMESTAMPTZ;
+
+-- ─── RPC: listar_ordenes_por_estado ──────────────────────
+CREATE OR REPLACE FUNCTION listar_ordenes_por_estado(p_estado TEXT DEFAULT NULL)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF p_estado IS NOT NULL THEN
+    RETURN COALESCE((
+      SELECT json_agg(
+        (datos_json || jsonb_build_object(
+          'id', id, 'numero', numero, 'clienteId', cliente_id,
+          'vehiculoId', vehiculo_id, 'mecanicoId', mecanico_id,
+          'estado', estado, 'facturaId', factura_id,
+          'fechaCreacion', fecha_creacion::TEXT,
+          'fechaActualizacion', fecha_actualizacion::TEXT,
+          'estadoCotizacion', estado_cotizacion,
+          'fechaCierre', fecha_cierre::TEXT
+        )) ORDER BY fecha_creacion DESC
+      )
+      FROM ordenes_trabajo
+      WHERE estado = p_estado AND deleted_at IS NULL
+    ), '[]'::json);
+  ELSE
+    RETURN COALESCE((
+      SELECT json_agg(
+        (datos_json || jsonb_build_object(
+          'id', id, 'numero', numero, 'clienteId', cliente_id,
+          'vehiculoId', vehiculo_id, 'mecanicoId', mecanico_id,
+          'estado', estado, 'facturaId', factura_id,
+          'fechaCreacion', fecha_creacion::TEXT,
+          'fechaActualizacion', fecha_actualizacion::TEXT,
+          'estadoCotizacion', estado_cotizacion,
+          'fechaCierre', fecha_cierre::TEXT
+        )) ORDER BY fecha_creacion DESC
+      )
+      FROM ordenes_trabajo WHERE deleted_at IS NULL
+    ), '[]'::json);
+  END IF;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_ordenes_por_estado(TEXT) TO anon, authenticated;
+
+-- ─── RPC: cerrar_orden ───────────────────────────────────
+CREATE OR REPLACE FUNCTION cerrar_orden(
+  p_orden_id UUID,
+  p_asesor_id UUID
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_rol TEXT;
+  v_estado TEXT;
+  v_estado_cotizacion TEXT;
+  v_pago_confirmado BOOLEAN;
+  v_diagnostico_confirmado BOOLEAN;
+  v_factura_id VARCHAR(50);
+BEGIN
+  -- Validar que el usuario es asesor
+  SELECT rol INTO v_rol FROM usuarios WHERE id = p_asesor_id;
+  IF v_rol != 'asesor' THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Solo el Asesor puede cerrar órdenes');
+  END IF;
+
+  -- Obtener estado de la orden
+  SELECT estado, estado_cotizacion, factura_id INTO v_estado, v_estado_cotizacion, v_factura_id
+  FROM ordenes_trabajo WHERE id = p_orden_id AND deleted_at IS NULL;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Orden no encontrada');
+  END IF;
+
+  -- Validar estado: debe ser liberada o liquidacion_diagnostico
+  IF v_estado NOT IN ('liberada', 'liquidacion_diagnostico') THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'La orden no puede cerrarse en estado ' || v_estado);
+  END IF;
+
+  -- Escenario 1: QC aprobado + pago confirmado
+  IF v_estado = 'liberada' THEN
+    IF v_factura_id IS NULL THEN
+      RETURN json_build_object('ok', FALSE, 'error', 'No hay factura asociada a la orden');
+    END IF;
+
+    SELECT (estado = 'pagada') INTO v_pago_confirmado
+    FROM facturas WHERE numero = v_factura_id;
+
+    IF NOT v_pago_confirmado THEN
+      RETURN json_build_object('ok', FALSE, 'error', 'El pago no ha sido confirmado');
+    END IF;
+  END IF;
+
+  -- Escenario 2: Cotización rechazada + cobro diagnóstico confirmado
+  IF v_estado = 'liquidacion_diagnostico' THEN
+    SELECT (estado = 'pagado') INTO v_diagnostico_confirmado
+    FROM cobros_diagnostico WHERE orden_id = p_orden_id
+    ORDER BY fecha DESC LIMIT 1;
+
+    IF NOT v_diagnostico_confirmado THEN
+      RETURN json_build_object('ok', FALSE, 'error', 'El cobro por diagnóstico no ha sido confirmado');
+    END IF;
+  END IF;
+
+  -- Actualizar orden como finalizada
+  UPDATE ordenes_trabajo
+  SET estado = 'finalizada',
+      fecha_cierre = NOW(),
+      fecha_actualizacion = CURRENT_DATE
+  WHERE id = p_orden_id;
+
+  RETURN json_build_object('ok', TRUE, 'mensaje', 'Orden cerrada exitosamente');
+END;
+$$;
+GRANT EXECUTE ON FUNCTION cerrar_orden(UUID, UUID) TO anon, authenticated;

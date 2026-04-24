@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 import { supabase, RpcUser } from '../../lib/supabase';
+export type { WorkOrderNote, WorkOrderAttachment, WorkOrderQC } from '../../lib/supabase';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -7,6 +8,7 @@ export type Rol = 'administrador' | 'asesor' | 'mecanico' | 'jefe_taller' | 'cli
 
 export type EstadoOrden =
   | 'registrada'
+  | 'asignada'
   | 'en_diagnostico'
   | 'esperando_aprobacion'
   | 'en_reparacion'
@@ -120,7 +122,8 @@ export interface MovimientoKardex {
 
 export interface OrdenTrabajo {
   id: string; numero: string; clienteId: string; vehiculoId: string;
-  descripcionProblema: string; mecanicoId?: string; mecanicosIds?: string[];
+  descripcionProblema: string; tipoServicio?: string; kmEntrada?: number;
+  mecanicoId?: string; mecanicosIds?: string[];
   jefeAsignadoId?: string; estado: EstadoOrden; diagnostico?: string;
   fallasAdicionales?: string; fotosDiagnostico?: string[]; fotosReparacion?: string[];
   fotosRecepcion?: string[]; reparacion?: string;
@@ -132,6 +135,10 @@ export interface OrdenTrabajo {
   pagadoEnLinea?: boolean; metodoPagoFinal?: string;
   fechaCreacion: string; fechaActualizacion: string;
   creadoPor?: string; modificadoPor?: string; asignadoPor?: string;
+  cliente?: Cliente;
+  vehiculo?: Vehiculo;
+  factura?: Factura;
+  cobroDiagnostico?: { estado: string };
 }
 
 export interface Repuesto {
@@ -264,8 +271,10 @@ interface AppContextType {
   addOrden: (o: Omit<OrdenTrabajo, 'id' | 'numero' | 'fechaCreacion' | 'fechaActualizacion' | 'repuestosUsados' | 'entregaFirmada'>) => void;
   updateOrden: (id: string, o: Partial<OrdenTrabajo>) => void;
   deleteOrden: (id: string) => void;
+  cargarOrdenesPorEstado: (estado: string) => Promise<void>;
+  cerrarOrden: (ordenId: string) => Promise<{ ok: boolean; error?: string }>;
 
-  addRepuesto: (r: Omit<Repuesto, 'id'>) => void;
+  addRepuesto: (r: Omit<Repuesto, 'id'>) => Promise<{ ok: boolean; error?: string }>;
   updateRepuesto: (id: string, r: Partial<Repuesto>) => void;
   deleteRepuesto: (id: string) => void;
   registrarSalidaRepuesto: (repuestoId: string, cantidad: number, ordenId?: string) => Promise<boolean>;
@@ -277,7 +286,7 @@ interface AppContextType {
   addAuditoria: (log: Omit<LogAuditoria, 'id'>) => void;
   addFactura: (f: Factura) => void;
   updateFactura: (numero: string, f: Partial<Factura>) => void;
-  rechazarCotizacion: (ordenId: string, motivo?: string) => Promise<void>;
+  rechazarCotizacion: (ordenId: string, montoDiagnostico?: number) => Promise<void>;
   aprobarCotizacion: (ordenId: string) => Promise<void>;
 
   notificaciones: Notificacion[];
@@ -286,6 +295,19 @@ interface AppContextType {
   marcarTodasLeidas: () => Promise<void>;
 
   updateCatalogs: (c: Partial<Catalogs>) => void;
+
+  notasOT: Record<string, import('../../lib/supabase').WorkOrderNote[]>;
+  adjuntosOT: Record<string, import('../../lib/supabase').WorkOrderAttachment[]>;
+  cargarNotasOT: (ordenId: string) => Promise<void>;
+  cargarAdjuntosOT: (ordenId: string) => Promise<void>;
+  registrarNotaOT: (ordenId: string, nota: string) => Promise<{ ok: boolean; error?: string }>;
+  adjuntarArchivoOT: (ordenId: string, urlArchivo: string) => Promise<{ ok: boolean; error?: string }>;
+  iniciarReparacion: (ordenId: string) => Promise<{ ok: boolean; error?: string }>;
+  finalizarReparacion: (ordenId: string) => Promise<{ ok: boolean; error?: string }>;
+
+  qcOT: Record<string, import('../../lib/supabase').WorkOrderQC | null>;
+  cargarQCOT: (ordenId: string) => Promise<void>;
+  registrarQC: (ordenId: string, aprobado: boolean, observaciones?: string) => Promise<{ ok: boolean; nuevoEstado?: string; error?: string }>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -307,6 +329,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [catalogs, setCatalogs] = useState<Catalogs>(initialCatalogs);
   const [facturas, setFacturas] = useState<Factura[]>([]);
   const [notificaciones, setNotificaciones] = useState<Notificacion[]>([]);
+  const [notasOT, setNotasOT] = useState<Record<string, import('../../lib/supabase').WorkOrderNote[]>>({});
+  const [adjuntosOT, setAdjuntosOT] = useState<Record<string, import('../../lib/supabase').WorkOrderAttachment[]>>({});
+  const [qcOT, setQCOT] = useState<Record<string, import('../../lib/supabase').WorkOrderQC | null>>({});
 
   // Restaurar sesión guardada al montar la app
   useEffect(() => {
@@ -769,18 +794,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const deleteProveedor = (id: string) => setProveedores(prev => prev.filter(x => x.id !== id));
 
   const addOrden = async (o: Omit<OrdenTrabajo, 'id' | 'numero' | 'fechaCreacion' | 'fechaActualizacion' | 'repuestosUsados' | 'entregaFirmada'>) => {
-    const num = `OT-${String(ordenes.length + 1).padStart(3, '0')}`;
+    if (!currentUser) return;
     const { data, error } = await supabase.rpc('crear_orden', {
-      p_numero: num,
+      p_tipo_servicio: o.tipoServicio,
       p_cliente_id: o.clienteId,
       p_vehiculo_id: o.vehiculoId,
-      p_creado_por: currentUser?.id,
+      p_creado_por: currentUser.id,
       p_datos: { ...o, repuestosUsados: [], entregaFirmada: false }
     });
-    
-    if (!error && data?.success) {
-      const now = new Date().toISOString().split('T')[0];
-      setOrdenes(prev => [...prev, { ...o, id: data.id, numero: num, fechaCreacion: now, fechaActualizacion: now, repuestosUsados: [], entregaFirmada: false }]);
+    if (error) return;
+    if (data?.ok && data.orden) {
+      const orden = data.orden as OrdenTrabajo;
+      setOrdenes(prev => [...prev, orden]);
     }
   };
 
@@ -799,7 +824,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const deleteOrden = (id: string) => setOrdenes(p => p.filter(x => x.id !== id));
 
-  const addRepuesto = (r: Omit<Repuesto, 'id'>) => setRepuestos(p => [...p, { ...r, id: `r${Date.now()}` }]);
+  const cargarOrdenesPorEstado = async (estado: string) => {
+    const { data } = await supabase.rpc('listar_ordenes_por_estado', { p_estado: estado });
+    if (Array.isArray(data)) setOrdenes(data as OrdenTrabajo[]);
+  };
+
+  const cerrarOrden = async (ordenId: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!currentUser) return { ok: false, error: 'No hay usuario autenticado' };
+    const { data, error } = await supabase.rpc('cerrar_orden', {
+      p_orden_id: ordenId,
+      p_asesor_id: currentUser.id
+    });
+    if (error) return { ok: false, error: error.message };
+    if (data?.ok) {
+      await supabase.rpc('listar_ordenes', { p_usuario_id: currentUser.id, p_rol: currentUser.rol })
+        .then(({ data }) => { if (Array.isArray(data)) setOrdenes(data as OrdenTrabajo[]); });
+      return { ok: true };
+    }
+    return { ok: false, error: data?.error };
+  };
+
+  const addRepuesto = async (r: Omit<Repuesto, 'id'>): Promise<{ ok: boolean; error?: string }> => {
+    const { data, error } = await supabase.rpc('crear_repuesto', {
+      p_nombre: r.nombre,
+      p_categoria: r.categoria,
+      p_costo: r.costo,
+      p_margen_ganancia: r.margenGanancia,
+      p_cantidad: r.cantidad || 0,
+      p_stock_minimo: r.stockMinimo || 1,
+      p_proveedor_id: r.proveedorId ?? null,
+      p_imagen: r.imagen ?? null
+    });
+    if (error) return { ok: false, error: error.message };
+    if (data?.ok) setRepuestos(p => [...p, data.repuesto as Repuesto]);
+    return data?.ok ? { ok: true } : { ok: false, error: data?.error };
+  };
   const updateRepuesto = (id: string, r: Partial<Repuesto>) => setRepuestos(p => p.map(x => x.id === id ? { ...x, ...r } : x));
   const deleteRepuesto = (id: string) => setRepuestos(p => p.filter(x => x.id !== id));
 
@@ -925,99 +984,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!error) setFacturas(prev => prev.map(f => f.numero === numero ? { ...f, ...data } : f));
   };
 
-  const rechazarCotizacion = async (ordenId: string, motivo?: string) => {
-    const orden = ordenes.find(o => o.id === ordenId);
-    if (!orden) return;
-
-    // 1. Liberar reservas si existen
-    if (orden.repuestosReservados && orden.repuestosReservados.length > 0) {
-      liberarReservas(orden.repuestosReservados, orden.id);
-    }
-
-    const costoDx = orden.cotizacion?.costoDiagnostico || 0;
-    let facturaId = orden.facturaId;
-
-    // 2. Generar cargo por diagnóstico si aplica
-    if (costoDx > 0 && !facturaId) {
-      const numFac = `FAC-DX-${Date.now()}`;
-      const nuevaFactura: Factura = {
-        numero: numFac,
-        fecha: new Date().toISOString().split('T')[0],
-        ordenId: orden.id,
-        clienteId: orden.clienteId,
-        subtotal: costoDx,
-        impuesto: costoDx * 0.12,
-        total: costoDx * 1.12,
-        metodoPago: 'Pendiente',
-        estado: 'emitida',
-      };
-      await addFactura(nuevaFactura);
-      facturaId = numFac;
-    }
-
-    // 3. Actualizar estado de la OT en Supabase
-    const updateData: Partial<OrdenTrabajo> = {
-      estado: 'liquidacion_diagnostico',
-      facturaId,
-      cotizacion: orden.cotizacion ? {
-        ...orden.cotizacion,
-        estado: 'rechazada',
-        motivoRechazo: motivo,
-        fechaRespuesta: new Date().toISOString().split('T')[0]
-      } : undefined
-    };
-    await updateOrden(orden.id, updateData);
-
-    // 4. Log Auditoría
-    if (currentUser) {
-      await addAuditoria({
-        fecha: new Date().toISOString(),
-        usuarioId: currentUser.id,
-        usuarioNombre: currentUser.nombre,
-        accion: 'RECHAZAR_COTIZACION',
-        modulo: 'Órdenes',
-        detalles: `Cotización rechazada. Cargado diagnóstico $${costoDx}. OT → LIQUIDACION_DIAGNOSTICO`,
-        entidadId: orden.id,
-        entidadTipo: 'OrdenTrabajo'
+  const rechazarCotizacion = async (ordenId: string, montoDiagnostico?: number) => {
+    if (!currentUser) return;
+    const costoDx = montoDiagnostico || 0;
+    const { data } = await supabase.rpc('rechazar_cotizacion', {
+      p_orden_id: ordenId,
+      p_cliente_id: currentUser.id,
+      p_monto_diagnostico: costoDx
+    });
+    if (data?.ok) {
+      const { data: updated } = await supabase.rpc('listar_ordenes', {
+        p_usuario_id: currentUser.id,
+        p_rol: currentUser.rol
       });
+      if (Array.isArray(updated)) setOrdenes(updated as OrdenTrabajo[]);
     }
   };
 
   const aprobarCotizacion = async (ordenId: string) => {
-    const orden = ordenes.find(o => o.id === ordenId);
-    if (!orden) return;
-
-    // 1. Procesar repuestos reservados (convertir reserva a salida real)
-    if (orden.repuestosReservados && orden.repuestosReservados.length > 0) {
-      for (const r of orden.repuestosReservados) {
-        await registrarSalidaRepuesto(r.repuestoId, r.cantidad, orden.id);
-      }
-      await liberarReservas(orden.repuestosReservados, orden.id);
-    }
-
-    // 2. Actualizar estado de la OT en Supabase
-    const updateData: Partial<OrdenTrabajo> = {
-      estado: 'en_reparacion',
-      cotizacion: orden.cotizacion ? {
-        ...orden.cotizacion,
-        estado: 'aprobada',
-        fechaRespuesta: new Date().toISOString().split('T')[0]
-      } : undefined
-    };
-    await updateOrden(orden.id, updateData);
-
-    // 3. Log Auditoría
-    if (currentUser) {
-      await addAuditoria({
-        fecha: new Date().toISOString(),
-        usuarioId: currentUser.id,
-        usuarioNombre: currentUser.nombre,
-        accion: 'APROBAR_COTIZACION',
-        modulo: 'Órdenes',
-        detalles: `Cotización aprobada por el cliente. OT → EN_REPARACION`,
-        entidadId: orden.id,
-        entidadTipo: 'OrdenTrabajo'
+    if (!currentUser) return;
+    const { data } = await supabase.rpc('aprobar_cotizacion', {
+      p_orden_id: ordenId,
+      p_cliente_id: currentUser.id
+    });
+    if (data?.ok) {
+      const { data: updated } = await supabase.rpc('listar_ordenes', {
+        p_usuario_id: currentUser.id,
+        p_rol: currentUser.rol
       });
+      if (Array.isArray(updated)) setOrdenes(updated as OrdenTrabajo[]);
     }
   };
 
@@ -1052,6 +1047,76 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const cargarNotasOT = async (ordenId: string) => {
+    const { data } = await supabase.rpc('listar_notas_ot', { p_orden_id: ordenId });
+    if (Array.isArray(data)) setNotasOT(prev => ({ ...prev, [ordenId]: data }));
+  };
+
+  const cargarAdjuntosOT = async (ordenId: string) => {
+    const { data } = await supabase.rpc('listar_adjuntos_ot', { p_orden_id: ordenId });
+    if (Array.isArray(data)) setAdjuntosOT(prev => ({ ...prev, [ordenId]: data }));
+  };
+
+  const registrarNotaOT = async (ordenId: string, nota: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!currentUser) return { ok: false, error: 'Sin sesión' };
+    const { data, error } = await supabase.rpc('registrar_nota_ot', {
+      p_orden_id: ordenId, p_autor_id: currentUser.id, p_nota: nota,
+    });
+    if (error) return { ok: false, error: error.message };
+    return data?.ok ? { ok: true } : { ok: false, error: data?.error };
+  };
+
+  const adjuntarArchivoOT = async (ordenId: string, urlArchivo: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!currentUser) return { ok: false, error: 'Sin sesión' };
+    const { data, error } = await supabase.rpc('adjuntar_archivo_ot', {
+      p_orden_id: ordenId, p_usuario_id: currentUser.id, p_url_archivo: urlArchivo,
+    });
+    if (error) return { ok: false, error: error.message };
+    return data?.ok ? { ok: true } : { ok: false, error: data?.error };
+  };
+
+  const iniciarReparacion = async (ordenId: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!currentUser) return { ok: false, error: 'Sin sesión' };
+    const { data, error } = await supabase.rpc('iniciar_reparacion', {
+      p_orden_id: ordenId, p_mecanico_id: currentUser.id,
+    });
+    if (error) return { ok: false, error: error.message };
+    if (!data?.ok) return { ok: false, error: data?.error };
+    setOrdenes(p => p.map(o => o.id === ordenId ? { ...o, estado: 'en_reparacion' as const, fechaActualizacion: new Date().toISOString().split('T')[0] } : o));
+    return { ok: true };
+  };
+
+  const finalizarReparacion = async (ordenId: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!currentUser) return { ok: false, error: 'Sin sesión' };
+    const { data, error } = await supabase.rpc('finalizar_reparacion', {
+      p_orden_id: ordenId, p_mecanico_id: currentUser.id,
+    });
+    if (error) return { ok: false, error: error.message };
+    if (!data?.ok) return { ok: false, error: data?.error };
+    setOrdenes(p => p.map(o => o.id === ordenId ? { ...o, estado: 'control_calidad' as const, fechaActualizacion: new Date().toISOString().split('T')[0] } : o));
+    return { ok: true };
+  };
+
+  const cargarQCOT = async (ordenId: string) => {
+    const { data } = await supabase.rpc('listar_qc_ot', { p_orden_id: ordenId });
+    if (Array.isArray(data) && data.length > 0) {
+      setQCOT(prev => ({ ...prev, [ordenId]: data[0] }));
+    }
+  };
+
+  const registrarQC = async (ordenId: string, aprobado: boolean, observaciones?: string): Promise<{ ok: boolean; nuevoEstado?: string; error?: string }> => {
+    if (!currentUser) return { ok: false, error: 'Sin sesión' };
+    const { data, error } = await supabase.rpc('registrar_qc', {
+      p_orden_id: ordenId, p_inspector_id: currentUser.id, p_aprobado: aprobado, p_observaciones: observaciones || null,
+    });
+    if (error) return { ok: false, error: error.message };
+    if (!data?.ok) return { ok: false, error: data?.error };
+    const nuevoEstado = data.nuevoEstado;
+    setOrdenes(p => p.map(o => o.id === ordenId ? { ...o, estado: nuevoEstado === 'liberada' ? 'liberada' : 'en_reparacion', fechaActualizacion: new Date().toISOString().split('T')[0] } : o));
+    await cargarQCOT(ordenId);
+    return { ok: true, nuevoEstado };
+  };
+
   const updateCatalogs = (c: Partial<Catalogs>) => setCatalogs(p => ({ ...p, ...c }));
 
   return (
@@ -1064,12 +1129,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addVehiculo, updateVehiculo, deleteVehiculo,
       addCita, updateCita, deleteCita, confirmarCita, reprogramarCita, cancelarCita, updateCitaEstado,
       addProveedor, updateProveedor, deleteProveedor,
-      addOrden, updateOrden, deleteOrden,
+      addOrden, updateOrden, deleteOrden, cargarOrdenesPorEstado, cerrarOrden,
       addRepuesto, updateRepuesto, deleteRepuesto,
       registrarSalidaRepuesto, reservarRepuestos, liberarReservas, addStockRepuesto,
       addKardex, addAuditoria, addFactura, updateFactura, rechazarCotizacion, aprobarCotizacion,
       notificaciones, addNotificacion, marcarNotificacionLeida, marcarTodasLeidas,
       updateCatalogs,
+      notasOT, adjuntosOT, cargarNotasOT, cargarAdjuntosOT,
+      registrarNotaOT, adjuntarArchivoOT, iniciarReparacion, finalizarReparacion,
+      qcOT, cargarQCOT, registrarQC,
     }}>
       {children}
     </AppContext.Provider>
