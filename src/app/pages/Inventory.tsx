@@ -242,7 +242,7 @@ function RepuestosPanel({
 }: {
   repuestos: Repuesto[]; proveedores: Proveedor[]; stockBajo: Repuesto[];
   canEdit: boolean; showProveedorInfo: boolean;
-  addRepuesto: (r: Omit<Repuesto, 'id'>) => void;
+  addRepuesto: (r: Omit<Repuesto, 'id'>) => Promise<{ ok: boolean; error?: string }>;
   updateRepuesto: (id: string, r: Partial<Repuesto>) => void;
   deleteRepuesto: (id: string) => void;
   registrarSalidaRepuesto: (id: string, cant: number, ordenId?: string) => boolean;
@@ -269,11 +269,15 @@ function RepuestosPanel({
   const openCreate = () => { setEditId(null); setForm({ ...emptyRepuesto }); setModalOpen(true); };
   const openEdit = (r: Repuesto) => { setEditId(r.id); setForm({ ...r }); setModalOpen(true); };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const precio = form.costo > 0 ? Number((form.costo * (1 + form.margenGanancia)).toFixed(2)) : form.precio;
     if (editId) { updateRepuesto(editId, { ...form, precio }); toast.success('Repuesto actualizado'); }
-    else { addRepuesto({ ...form, precio, cantidadReservada: 0 }); toast.success('Repuesto agregado'); }
+    else {
+      const result = await addRepuesto({ ...form, precio, cantidadReservada: 0 });
+      if (result.ok) { toast.success('Repuesto agregado'); }
+      else { toast.error(result.error || 'Error al agregar repuesto'); return; }
+    }
     setModalOpen(false);
   };
 
