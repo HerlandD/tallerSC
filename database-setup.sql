@@ -242,6 +242,18 @@ CREATE TABLE IF NOT EXISTS clientes (
   deleted_at     TIMESTAMP
 );
 
+-- ─── 7a. Table: proveedores ────────────────────────────────
+CREATE TABLE IF NOT EXISTS proveedores (
+  id        UUID         DEFAULT gen_random_uuid() PRIMARY KEY,
+  nombre    VARCHAR(100) NOT NULL,
+  contacto  VARCHAR(100),
+  telefono  VARCHAR(20)  NOT NULL,
+  email     VARCHAR(100) NOT NULL,
+  productos TEXT,
+  activo    BOOLEAN      NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 ALTER TABLE clientes ENABLE ROW LEVEL SECURITY;
 
 CREATE INDEX IF NOT EXISTS idx_clientes_ci    ON clientes(ci)    WHERE deleted_at IS NULL;
@@ -443,6 +455,130 @@ BEGIN
 END;
 $$;
 GRANT EXECUTE ON FUNCTION eliminar_cliente(UUID) TO anon, authenticated;
+
+-- =========================================================
+-- MÓDULO: PROVEEDORES
+-- =========================================================
+
+-- ─── 11a. RPC: listar_proveedores ──────────────────────────
+CREATE OR REPLACE FUNCTION listar_proveedores()
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(
+      json_build_object(
+        'id', id,
+        'nombre', nombre,
+        'contacto', contacto,
+        'telefono', telefono,
+        'email', email,
+        'productos', productos,
+        'activo', activo
+      ) ORDER BY nombre
+    )
+    FROM proveedores
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_proveedores() TO anon, authenticated;
+
+-- ─── 11b. RPC: crear_proveedor ────────────────────────────
+CREATE OR REPLACE FUNCTION crear_proveedor(
+  p_nombre TEXT,
+  p_contacto TEXT DEFAULT NULL,
+  p_telefono TEXT,
+  p_email TEXT,
+  p_productos TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_id UUID;
+BEGIN
+  -- Validaciones
+  IF trim(p_nombre) = '' OR p_nombre IS NULL THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Nombre es obligatorio');
+  END IF;
+  IF trim(p_telefono) = '' OR p_telefono IS NULL THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Teléfono es obligatorio');
+  END IF;
+  IF trim(p_email) = '' OR p_email IS NULL THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Email es obligatorio');
+  END IF;
+
+  -- Insertar
+  INSERT INTO proveedores (nombre, contacto, telefono, email, productos, activo)
+  VALUES (trim(p_nombre), NULLIF(trim(p_contacto), ''), trim(p_telefono), trim(p_email), p_productos, TRUE)
+  RETURNING id INTO v_id;
+
+  RETURN json_build_object(
+    'ok', TRUE,
+    'proveedor', json_build_object(
+      'id', v_id,
+      'nombre', p_nombre,
+      'contacto', p_contacto,
+      'telefono', p_telefono,
+      'email', p_email,
+      'productos', p_productos,
+      'activo', TRUE
+    )
+  );
+END;
+$$;
+GRANT EXECUTE ON FUNCTION crear_proveedor(TEXT, TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
+
+-- ─── 11c. RPC: actualizar_proveedor ───────────────────────
+CREATE OR REPLACE FUNCTION actualizar_proveedor(
+  p_id UUID,
+  p_nombre TEXT DEFAULT NULL,
+  p_contacto TEXT DEFAULT NULL,
+  p_telefono TEXT DEFAULT NULL,
+  p_email TEXT DEFAULT NULL,
+  p_productos TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM proveedores WHERE id = p_id) THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Proveedor no encontrado');
+  END IF;
+
+  UPDATE proveedores SET
+    nombre = COALESCE(NULLIF(trim(p_nombre), ''), nombre),
+    contacto = COALESCE(NULLIF(trim(p_contacto), ''), contacto),
+    telefono = COALESCE(NULLIF(trim(p_telefono), ''), telefono),
+    email = COALESCE(NULLIF(trim(p_email), ''), email),
+    productos = COALESCE(p_productos, productos)
+  WHERE id = p_id;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION actualizar_proveedor(UUID, TEXT, TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
+
+-- ─── 11d. RPC: toggle_estado_proveedor ────────────────────
+CREATE OR REPLACE FUNCTION toggle_estado_proveedor(p_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_nuevo_estado BOOLEAN;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM proveedores WHERE id = p_id) THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Proveedor no encontrado');
+  END IF;
+
+  UPDATE proveedores SET activo = NOT activo WHERE id = p_id
+  RETURNING activo INTO v_nuevo_estado;
+
+  RETURN json_build_object('ok', TRUE, 'activo', v_nuevo_estado);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION toggle_estado_proveedor(UUID) TO anon, authenticated;
 
 -- =========================================================
 -- MÓDULO: VEHÍCULOS
@@ -1387,6 +1523,7 @@ CREATE TABLE IF NOT EXISTS repuestos (
   deleted_at         TIMESTAMPTZ
 );
 ALTER TABLE repuestos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE repuestos ADD CONSTRAINT fk_repuesto_proveedor FOREIGN KEY (proveedor_id) REFERENCES proveedores(id) ON DELETE SET NULL;
 
 -- ─── 29. TABLA: ordenes_trabajo ──────────────────────────
 CREATE TABLE IF NOT EXISTS ordenes_trabajo (

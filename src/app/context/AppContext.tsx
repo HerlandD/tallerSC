@@ -264,9 +264,9 @@ interface AppContextType {
   cancelarCita:  (id: string, motivo?: string) => Promise<{ ok: boolean; error?: string }>;
   updateCitaEstado: (id: string, nuevoEstado: EstadoCita, motivo?: string) => Promise<{ ok: boolean; error?: string }>;
 
-  addProveedor: (p: Omit<Proveedor, 'id'>) => void;
-  updateProveedor: (id: string, p: Partial<Proveedor>) => void;
-  deleteProveedor: (id: string) => void;
+  addProveedor: (p: Omit<Proveedor, 'id'>) => Promise<{ ok: boolean; error?: string }>;
+  updateProveedor: (id: string, p: Partial<Proveedor>) => Promise<{ ok: boolean; error?: string }>;
+  deleteProveedor: (id: string) => Promise<{ ok: boolean; error?: string }>;
 
   addOrden: (o: Omit<OrdenTrabajo, 'id' | 'numero' | 'fechaCreacion' | 'fechaActualizacion' | 'repuestosUsados' | 'entregaFirmada'>) => void;
   updateOrden: (id: string, o: Partial<OrdenTrabajo>) => void;
@@ -472,6 +472,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     supabase.rpc('listar_repuestos').then(({ data }) => {
       if (Array.isArray(data)) setRepuestos(data as Repuesto[]);
+    });
+    supabase.rpc('listar_proveedores').then(({ data }) => {
+      if (Array.isArray(data)) setProveedores(data as Proveedor[]);
     });
     supabase.rpc('listar_notificaciones').then(({ data }) => {
       if (Array.isArray(data)) setNotificaciones(data as Notificacion[]);
@@ -789,9 +792,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const addProveedor = (p: Omit<Proveedor, 'id'>) => setProveedores(prev => [...prev, { ...p, id: `pv${Date.now()}` }]);
-  const updateProveedor = (id: string, p: Partial<Proveedor>) => setProveedores(prev => prev.map(x => x.id === id ? { ...x, ...p } : x));
-  const deleteProveedor = (id: string) => setProveedores(prev => prev.filter(x => x.id !== id));
+  const addProveedor = async (p: Omit<Proveedor, 'id'>): Promise<{ ok: boolean; error?: string }> => {
+    const { data, error } = await supabase.rpc('crear_proveedor', {
+      p_nombre: p.nombre,
+      p_contacto: p.contacto || null,
+      p_telefono: p.telefono,
+      p_email: p.email,
+      p_productos: p.productos || null
+    });
+    if (error) return { ok: false, error: error.message };
+    if (data?.ok) setProveedores(prev => [...prev, data.proveedor as Proveedor]);
+    return data?.ok ? { ok: true } : { ok: false, error: data?.error };
+  };
+  const updateProveedor = async (id: string, p: Partial<Proveedor>): Promise<{ ok: boolean; error?: string }> => {
+    const { data, error } = await supabase.rpc('actualizar_proveedor', {
+      p_id: id,
+      p_nombre: p.nombre || null,
+      p_contacto: p.contacto || null,
+      p_telefono: p.telefono || null,
+      p_email: p.email || null,
+      p_productos: p.productos || null
+    });
+    if (error) return { ok: false, error: error.message };
+    if (data?.ok) setProveedores(prev => prev.map(x => x.id === id ? { ...x, ...p } : x));
+    return data?.ok ? { ok: true } : { ok: false, error: data?.error };
+  };
+  const deleteProveedor = async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    const { data, error } = await supabase.rpc('toggle_estado_proveedor', { p_id: id });
+    if (error) return { ok: false, error: error.message };
+    if (data?.ok) setProveedores(prev => prev.map(x => x.id === id ? { ...x, activo: data.activo } : x));
+    return data?.ok ? { ok: true } : { ok: false, error: data?.error };
+  };
 
   const addOrden = async (o: Omit<OrdenTrabajo, 'id' | 'numero' | 'fechaCreacion' | 'fechaActualizacion' | 'repuestosUsados' | 'entregaFirmada'>) => {
     if (!currentUser) return;
