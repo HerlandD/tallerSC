@@ -795,9 +795,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addProveedor = async (p: Omit<Proveedor, 'id'>): Promise<{ ok: boolean; error?: string }> => {
     const { data, error } = await supabase.rpc('crear_proveedor', {
       p_nombre: p.nombre,
-      p_contacto: p.contacto || null,
       p_telefono: p.telefono,
       p_email: p.email,
+      p_contacto: p.contacto || null,
       p_productos: p.productos || null
     });
     if (error) return { ok: false, error: error.message };

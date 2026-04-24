@@ -487,9 +487,9 @@ GRANT EXECUTE ON FUNCTION listar_proveedores() TO anon, authenticated;
 -- ─── 11b. RPC: crear_proveedor ────────────────────────────
 CREATE OR REPLACE FUNCTION crear_proveedor(
   p_nombre TEXT,
-  p_contacto TEXT DEFAULT NULL,
   p_telefono TEXT,
   p_email TEXT,
+  p_contacto TEXT DEFAULT NULL,
   p_productos TEXT DEFAULT NULL
 )
 RETURNS JSON
