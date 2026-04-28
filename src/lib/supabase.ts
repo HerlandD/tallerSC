@@ -91,6 +91,16 @@ export interface WorkOrderAttachment {
   id: string; ordenId: string; urlArchivo: string; fecha: string;
 }
 
+export interface Pago {
+  id: string; ordenId: string; metodo: 'Efectivo' | 'Tarjeta' | 'QR' | 'Transferencia';
+  monto: number; referencia?: string; fecha: string; confirmado: boolean;
+}
+
+export interface Factura {
+  id: string; ordenId: string; pagoId?: string; numero: string;
+  subtotal: number; iva: number; total: number; fecha: string;
+}
+
 export interface WorkOrderQC {
   id: string; ordenId: string; inspectorId: string; inspectorNombre: string;
   aprobado: boolean; observaciones?: string; fecha: string;

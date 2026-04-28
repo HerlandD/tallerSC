@@ -212,15 +212,12 @@ GRANT EXECUTE ON FUNCTION registrar_cliente(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,T
 -- ON CONFLICT DO NOTHING: seguro de correr múltiples veces
 INSERT INTO usuarios (username, password, nombre, rol, email, telefono, ci, activo) VALUES
   ('admin',     'admin123',   'Admin Sistema',   'admin',    'admin@tallerpro.com',           '0000001',   '0000001', TRUE),
-  ('asesor',    'asesor123',  'María García',    'asesor',   'mgarcia@tallerpro.com',         '0991234567','1234561', TRUE),
-  ('jefe',      'jefe123',    'Ana Supervisora', 'jefe',     'asupervisora@tallerpro.com',    '0955678901','1234565', TRUE),
-  ('mecanico',  'mec123',     'Juan Pérez',      'mecanico', 'jperez@tallerpro.com',          '0982345678','1234562', TRUE),
-  ('mecanico2', 'mec456',     'Carlos Ramos',    'mecanico', 'cramos@tallerpro.com',          '0973456789','1234563', TRUE),
-  ('mecanico3', 'mec789',     'Roberto Ayala',   'mecanico', 'rayala@tallerpro.com',          '0964567890','1234564', TRUE),
-  ('mecanico4', 'mec101',     'Pedro Naranjo',   'mecanico', 'pnaranjo@tallerpro.com',        '0946789012','1234566', TRUE),
-  ('mecanico5', 'mec202',     'Sofía Mendoza',   'mecanico', 'smendoza@tallerpro.com',        '0937890123','1234568', TRUE),
-  ('cliente',   'cliente123', 'Luis Torres',     'cliente',  'ltorres@mail.com',              '0987654321','1234567', TRUE)
-ON CONFLICT (username) DO NOTHING;
+  ('ezedu',    '123456',  'María García',    'cliente',   'mgarcia@tallerpro.com',         '0991234567','1234561', TRUE),
+  ('juanquis',      '123456',    'Ana Supervisora', 'mecanico',     'asupervisora@tallerpro.com',    '0955678901','1234565', TRUE),
+  ('dybala',  '123456',     'Juan Pérez',      'asesor', 'jperez@tallerpro.com',          '0982345678','1234562', TRUE),
+  ('cr7', '123456',     'Carlos Ramos',    'jefe', 'cramos@tallerpro.com',          '0973456789','1234563', TRUE),
+  ('arteta', '123456',     'Roberto Ayala',   'cliente', 'rayala@tallerpro.com',          '0964567890','1234564', TRUE)
+  ON CONFLICT (username) DO NOTHING;
 
 -- =========================================================
 -- MÓDULO: CLIENTES
@@ -418,6 +415,16 @@ BEGIN
     updated_at = NOW()
   WHERE id = p_id AND deleted_at IS NULL
   RETURNING * INTO v_upd;
+
+  -- Sincronizar usuario_id si existe
+  IF v_upd.usuario_id IS NOT NULL THEN
+     UPDATE usuarios SET 
+       direccion = NULLIF(trim(COALESCE(p_direccion, '')), ''),
+       telefono = COALESCE(NULLIF(trim(p_telefono), ''), telefono),
+       email = NULLIF(lower(trim(COALESCE(p_email, ''))), ''),
+       ci = trim(p_ci)
+     WHERE id = v_upd.usuario_id;
+  END IF;
 
   RETURN json_build_object('success', TRUE, 'cliente', json_build_object(
     'id',            v_upd.id,
@@ -1370,7 +1377,8 @@ CREATE OR REPLACE FUNCTION crear_usuario(
   p_email     TEXT    DEFAULT NULL,
   p_telefono  TEXT    DEFAULT NULL,
   p_ci        TEXT    DEFAULT NULL,
-  p_activo    BOOLEAN DEFAULT TRUE
+  p_activo    BOOLEAN DEFAULT TRUE,
+  p_direccion TEXT    DEFAULT NULL
 )
 RETURNS JSON
 LANGUAGE plpgsql
@@ -1398,8 +1406,8 @@ BEGIN
   -- Hash de contraseña
   v_hash := encode(sha256((p_password || v_pepper)::bytea), 'hex');
 
-  INSERT INTO usuarios (username, password, nombre, rol, email, telefono, ci, activo)
-  VALUES (p_username, v_hash, p_nombre, v_db_rol, p_email, p_telefono, p_ci, p_activo)
+  INSERT INTO usuarios (username, password, nombre, rol, email, telefono, ci, activo, direccion)
+  VALUES (p_username, v_hash, p_nombre, v_db_rol, p_email, p_telefono, p_ci, p_activo, p_direccion)
   RETURNING * INTO v_new;
 
   RETURN json_build_object(
@@ -1413,6 +1421,7 @@ BEGIN
       'telefono',      v_new.telefono,
       'ci',            v_new.ci,
       'activo',        v_new.activo,
+      'direccion',     v_new.direccion,
       'password',      v_new.password,
       'fechaCreacion', v_new.created_at
     )
@@ -1434,7 +1443,8 @@ CREATE OR REPLACE FUNCTION actualizar_usuario(
   p_email     TEXT    DEFAULT NULL,
   p_telefono  TEXT    DEFAULT NULL,
   p_ci        TEXT    DEFAULT NULL,
-  p_activo    BOOLEAN DEFAULT NULL
+  p_activo    BOOLEAN DEFAULT NULL,
+  p_direccion TEXT    DEFAULT NULL
 )
 RETURNS JSON
 LANGUAGE plpgsql
@@ -1475,7 +1485,8 @@ BEGIN
     email     = COALESCE(p_email,     email),
     telefono  = COALESCE(p_telefono,  telefono),
     ci        = COALESCE(p_ci,        ci),
-    activo    = COALESCE(p_activo,    activo)
+    activo    = COALESCE(p_activo,    activo),
+    direccion = COALESCE(p_direccion, direccion)
   WHERE id = p_id;
 
   RETURN json_build_object('success', TRUE);
@@ -1634,6 +1645,20 @@ BEGIN
       WHERE (cliente_id IN (SELECT id FROM clientes WHERE usuario_id = p_usuario_id))
         AND deleted_at IS NULL
     ), '[]'::json);
+  ELSIF p_rol = 'mecanico' AND p_usuario_id IS NOT NULL THEN
+    RETURN COALESCE((
+      SELECT json_agg(
+        (datos_json || jsonb_build_object(
+          'id', id, 'numero', numero, 'clienteId', cliente_id,
+          'vehiculoId', vehiculo_id, 'mecanicoId', mecanico_id,
+          'estado', estado, 'facturaId', factura_id,
+          'fechaCreacion', fecha_creacion::TEXT,
+          'fechaActualizacion', fecha_actualizacion::TEXT
+        )) ORDER BY fecha_creacion DESC
+      )
+      FROM ordenes_trabajo
+      WHERE mecanico_id = p_usuario_id AND deleted_at IS NULL
+    ), '[]'::json);
   ELSE
     RETURN COALESCE((
       SELECT json_agg(
@@ -1669,7 +1694,20 @@ BEGIN
   VALUES (p_numero, p_cliente_id, p_vehiculo_id, p_creado_por, p_datos)
   RETURNING * INTO v_nueva;
 
-  RETURN json_build_object('success', TRUE, 'id', v_nueva.id);
+  RETURN json_build_object(
+    'success', TRUE, 
+    'orden', (v_nueva.datos_json || jsonb_build_object(
+      'id', v_nueva.id, 
+      'numero', v_nueva.numero, 
+      'clienteId', v_nueva.cliente_id,
+      'vehiculoId', v_nueva.vehiculo_id, 
+      'mecanicoId', v_nueva.mecanico_id,
+      'estado', v_nueva.estado, 
+      'facturaId', v_nueva.factura_id,
+      'fechaCreacion', v_nueva.fecha_creacion::TEXT,
+      'fechaActualizacion', v_nueva.fecha_actualizacion::TEXT
+    ))
+  );
 END;
 $$;
 GRANT EXECUTE ON FUNCTION crear_orden(TEXT, UUID, UUID, UUID, JSONB) TO anon, authenticated;
@@ -1685,14 +1723,28 @@ CREATE OR REPLACE FUNCTION actualizar_orden(
 RETURNS JSON
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
+DECLARE
+  v_count INT;
 BEGIN
+  -- Actualizar solo los campos no-JSON
   UPDATE ordenes_trabajo SET
     estado             = COALESCE(p_estado, estado),
     mecanico_id        = COALESCE(p_mecanico_id, mecanico_id),
     factura_id         = COALESCE(p_factura_id, factura_id),
-    datos_json         = CASE WHEN p_datos IS NOT NULL THEN (datos_json || p_datos) ELSE datos_json END,
     fecha_actualizacion = CURRENT_DATE
   WHERE id = p_id;
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  IF v_count = 0 THEN
+    RETURN json_build_object('success', FALSE, 'error', 'Orden no encontrada');
+  END IF;
+
+  -- Guardar datos adicionales en JSON si se proporciona
+  IF p_datos IS NOT NULL THEN
+    UPDATE ordenes_trabajo SET
+      datos_json = datos_json || p_datos
+    WHERE id = p_id;
+  END IF;
 
   RETURN json_build_object('success', TRUE);
 END;
@@ -1803,21 +1855,42 @@ GRANT EXECUTE ON FUNCTION insertar_log_auditoria(UUID, TEXT, TEXT, TEXT, TEXT, U
 -- ─── 41. RPC: actualizar_repuesto ────────────────────────
 CREATE OR REPLACE FUNCTION actualizar_repuesto(
   p_id               UUID,
+  p_nombre           VARCHAR DEFAULT NULL,
+  p_categoria        VARCHAR DEFAULT NULL,
+  p_costo            DECIMAL DEFAULT NULL,
+  p_margen_ganancia  DECIMAL DEFAULT NULL,
+  p_precio           DECIMAL DEFAULT NULL,
+  p_stock_minimo     INT     DEFAULT NULL,
   p_cantidad         INT     DEFAULT NULL,
-  p_cantidad_reservada INT   DEFAULT NULL
+  p_cantidad_reservada INT   DEFAULT NULL,
+  p_proveedor_id     UUID    DEFAULT NULL,
+  p_imagen           TEXT    DEFAULT NULL
 )
 RETURNS JSON
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 BEGIN
   UPDATE repuestos SET
+    nombre             = COALESCE(p_nombre, nombre),
+    categoria          = COALESCE(p_categoria, categoria),
+    costo              = COALESCE(p_costo, costo),
+    margen_ganancia    = COALESCE(p_margen_ganancia, margen_ganancia),
+    precio             = COALESCE(p_precio, precio),
+    stock_minimo       = COALESCE(p_stock_minimo, stock_minimo),
     cantidad           = COALESCE(p_cantidad, cantidad),
-    cantidad_reservada = COALESCE(p_cantidad_reservada, cantidad_reservada)
+    cantidad_reservada = COALESCE(p_cantidad_reservada, cantidad_reservada),
+    proveedor_id       = COALESCE(p_proveedor_id, proveedor_id),
+    imagen             = COALESCE(p_imagen, imagen)
   WHERE id = p_id;
-  RETURN json_build_object('success', TRUE);
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Repuesto no encontrado');
+  END IF;
+
+  RETURN json_build_object('ok', TRUE);
 END;
 $$;
-GRANT EXECUTE ON FUNCTION actualizar_repuesto(UUID, INT, INT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION actualizar_repuesto(UUID, VARCHAR, VARCHAR, DECIMAL, DECIMAL, DECIMAL, INT, INT, INT, UUID, TEXT) TO anon, authenticated;
 
 -- ─── 41a. RPC: crear_repuesto ────────────────────────────
 CREATE OR REPLACE FUNCTION crear_repuesto(
@@ -1856,7 +1929,7 @@ BEGIN
   END IF;
 
   -- Calcular precio
-  v_precio := p_costo * (1 + p_margen_ganancia / 100);
+  v_precio := p_costo * (1 + p_margen_ganancia);
 
   -- Insertar repuesto
   INSERT INTO repuestos (nombre, categoria, cantidad, costo, margen_ganancia, precio, stock_minimo, proveedor_id, imagen)
@@ -1983,9 +2056,14 @@ BEGIN
             END IF;
         END IF;
 
-        IF (OLD.datos->>'mecanicoId' <> NEW.datos->>'mecanicoId' OR (OLD.datos->>'mecanicoId' IS NULL AND NEW.datos->>'mecanicoId' IS NOT NULL)) THEN
-            INSERT INTO logs_auditoria (usuario_id, usuario_nombre, accion, modulo, detalles, entidad_id, entidad_tipo)
-            VALUES (COALESCE(NEW.creado_por, '00000000-0000-0000-0000-000000000000'::UUID), 'Sistema (Trigger)', 'CAMBIO_MECANICO', 'Órdenes', 'Nuevo mecánico asignado a la orden', NEW.id, 'OrdenTrabajo');
+        -- Verificar cambio en mecanico_id (ahora es columna en vez de datos_json)
+        IF (OLD.mecanico_id IS DISTINCT FROM NEW.mecanico_id) THEN
+            BEGIN
+                INSERT INTO logs_auditoria (usuario_nombre, accion, modulo, detalles, entidad_id, entidad_tipo)
+                VALUES ('Sistema (Trigger)', 'CAMBIO_MECANICO', 'Órdenes', 'Nuevo mecánico asignado a la orden', NEW.id, 'OrdenTrabajo');
+            EXCEPTION WHEN OTHERS THEN
+                NULL;
+            END;
         END IF;
     END IF;
     RETURN NEW;
@@ -2073,8 +2151,8 @@ AS $$
 BEGIN
   IF NEW.rol = 'cliente' THEN
     -- Insertamos el cliente. Proporcionamos '' en apellido para evitar error de NOT NULL
-    INSERT INTO clientes (nombre, apellido, email, telefono, ci, usuario_id)
-    VALUES (NEW.nombre, '', NEW.email, NEW.telefono, NEW.ci, NEW.id)
+    INSERT INTO clientes (nombre, apellido, email, telefono, ci, direccion, usuario_id)
+    VALUES (NEW.nombre, '', NEW.email, NEW.telefono, NEW.ci, NEW.direccion, NEW.id)
     ON CONFLICT (usuario_id) DO NOTHING;
   END IF;
   RETURN NEW;
@@ -2296,6 +2374,451 @@ BEGIN
 END;
 $$;
 GRANT EXECUTE ON FUNCTION listar_adjuntos_ot(UUID) TO anon, authenticated;
+
+-- =========================================================
+-- HU-4.1: Registro de pagos en órdenes de trabajo
+-- =========================================================
+
+-- ─── TABLA: payments ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS payments (
+  id          UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  order_id    UUID        NOT NULL REFERENCES ordenes_trabajo(id),
+  metodo      VARCHAR(50) NOT NULL CHECK (metodo IN ('Efectivo', 'Tarjeta', 'QR', 'Transferencia')),
+  monto       DECIMAL(10,2) NOT NULL,
+  referencia  TEXT,
+  fecha       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  confirmado  BOOLEAN     NOT NULL DEFAULT FALSE
+);
+ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
+
+-- ─── RPC: registrar_pago ──────────────────────────────────
+CREATE OR REPLACE FUNCTION registrar_pago(
+  p_orden_id UUID,
+  p_metodo   TEXT,
+  p_monto    DECIMAL,
+  p_referencia TEXT DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_metodos_validos TEXT[] := ARRAY['Efectivo', 'Tarjeta', 'QR', 'Transferencia'];
+  v_metodos_digitales TEXT[] := ARRAY['Tarjeta', 'QR', 'Transferencia'];
+  v_confirmado BOOLEAN;
+BEGIN
+  IF NOT (p_metodo = ANY(v_metodos_validos)) THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Método de pago no válido');
+  END IF;
+
+  IF (p_metodo = ANY(v_metodos_digitales)) AND (p_referencia IS NULL OR p_referencia = '') THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'La referencia es obligatoria para pagos digitales');
+  END IF;
+
+  IF p_monto <= 0 THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'El monto debe ser mayor a 0');
+  END IF;
+
+  v_confirmado := p_metodo = ANY(v_metodos_digitales);
+
+  INSERT INTO payments (order_id, metodo, monto, referencia, confirmado)
+  VALUES (p_orden_id, p_metodo, p_monto, p_referencia, v_confirmado);
+
+  UPDATE ordenes_trabajo SET pagadoEnLinea = v_confirmado WHERE id = p_orden_id;
+
+  RETURN json_build_object('ok', TRUE, 'confirmado', v_confirmado);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION registrar_pago(UUID, TEXT, DECIMAL, TEXT) TO anon, authenticated;
+
+-- ─── RPC: listar_pagos_ot ────────────────────────────────
+CREATE OR REPLACE FUNCTION listar_pagos_ot(p_orden_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', id, 'ordenId', order_id, 'metodo', metodo,
+      'monto', monto, 'referencia', referencia, 'fecha', fecha, 'confirmado', confirmado
+    ) ORDER BY fecha DESC)
+    FROM payments
+    WHERE order_id = p_orden_id
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_pagos_ot(UUID) TO anon, authenticated;
+
+-- ─── RPC: confirmar_pago ──────────────────────────────────
+CREATE OR REPLACE FUNCTION confirmar_pago(p_pago_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE payments SET confirmado = TRUE WHERE id = p_pago_id;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Pago no encontrado');
+  END IF;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION confirmar_pago(UUID) TO anon, authenticated;
+
+-- =========================================================
+-- HU-4.2: Generación automática de facturas
+-- =========================================================
+
+-- ─── TABLA: invoices ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS invoices (
+  id        UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  order_id  UUID        NOT NULL REFERENCES ordenes_trabajo(id),
+  payment_id UUID       REFERENCES payments(id),
+  numero    VARCHAR(50) NOT NULL UNIQUE,
+  subtotal  DECIMAL(10,2) NOT NULL,
+  iva       DECIMAL(10,2) NOT NULL,
+  total     DECIMAL(10,2) NOT NULL,
+  url_pdf   TEXT,
+  fecha     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+
+-- ─── Secuencia para numeración de facturas ────────────────
+CREATE SEQUENCE IF NOT EXISTS invoice_seq START 1;
+
+-- ─── RPC: generar_factura ────────────────────────────────
+CREATE OR REPLACE FUNCTION generar_factura(p_pago_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_orden_id UUID;
+  v_cotizacion JSONB;
+  v_subtotal DECIMAL;
+  v_iva DECIMAL;
+  v_total DECIMAL;
+  v_numero VARCHAR;
+  v_pago_confirmado BOOLEAN;
+BEGIN
+  SELECT order_id, confirmado INTO v_orden_id, v_pago_confirmado
+  FROM payments WHERE id = p_pago_id;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Pago no encontrado');
+  END IF;
+
+  IF NOT v_pago_confirmado THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'El pago debe estar confirmado');
+  END IF;
+
+  SELECT (datos_json -> 'cotizacion')::JSONB INTO v_cotizacion
+  FROM ordenes_trabajo WHERE id = v_orden_id;
+
+  IF v_cotizacion IS NULL THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'No hay cotización en la orden');
+  END IF;
+
+  v_subtotal := (
+    SELECT COALESCE(SUM((linea->>'cantidad')::INT * (linea->>'precioUnitario')::DECIMAL), 0)
+    FROM jsonb_array_elements(v_cotizacion -> 'lineas') AS linea
+  );
+
+  v_iva := v_subtotal * 0.12;
+  v_total := v_subtotal + v_iva;
+  v_numero := 'FAC-' || TO_CHAR(NOW(), 'YYYYMMDD') || '-' || LPAD(NEXTVAL('invoice_seq')::TEXT, 5, '0');
+
+  INSERT INTO invoices (order_id, payment_id, numero, subtotal, iva, total)
+  VALUES (v_orden_id, p_pago_id, v_numero, v_subtotal, v_iva, v_total)
+  RETURNING numero INTO v_numero;
+
+  UPDATE ordenes_trabajo SET pagadoEnLinea = TRUE WHERE id = v_orden_id;
+
+  RETURN json_build_object('ok', TRUE, 'numero', v_numero, 'subtotal', v_subtotal, 'iva', v_iva, 'total', v_total);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION generar_factura(UUID) TO anon, authenticated;
+
+-- ─── RPC: listar_facturas_ot ─────────────────────────────
+CREATE OR REPLACE FUNCTION listar_facturas_ot(p_orden_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', id, 'ordenId', order_id, 'pagoId', payment_id,
+      'numero', numero, 'subtotal', subtotal, 'iva', iva, 'total', total, 'fecha', fecha
+    ) ORDER BY fecha DESC)
+    FROM invoices
+    WHERE order_id = p_orden_id
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_facturas_ot(UUID) TO anon, authenticated;
+
+-- ─── RPC: generar_html_factura ───────────────────────────
+CREATE OR REPLACE FUNCTION generar_html_factura(p_factura_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_factura RECORD;
+  v_orden RECORD;
+  v_cotizacion JSONB;
+  v_html TEXT;
+BEGIN
+  SELECT * INTO v_factura FROM invoices WHERE id = p_factura_id;
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Factura no encontrada');
+  END IF;
+
+  SELECT ot.*, c.nombre as cliente_nombre, c.ci, c.email, c.telefono, c.direccion,
+    v.placa, v.marca, v.modelo, v.año,
+    (ot.datos_json -> 'cotizacion')::JSONB as cotizacion
+  INTO v_orden
+  FROM ordenes_trabajo ot
+  JOIN clientes c ON ot.cliente_id = c.id
+  JOIN vehiculos v ON ot.vehiculo_id = v.id
+  WHERE ot.id = v_factura.order_id;
+
+  v_cotizacion := v_orden.cotizacion;
+
+  v_html := '<!DOCTYPE html><html lang="es"><head>
+    <meta charset="UTF-8"><title>Factura ' || v_factura.numero || '</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { font-family: Arial, sans-serif; padding: 30px; color: #1a1a2e; }
+      .header { display: flex; justify-content: space-between; border-bottom: 3px solid #2563eb; padding-bottom: 20px; margin-bottom: 20px; }
+      .logo-area h1 { color: #2563eb; font-size: 24px; font-weight: 900; }
+      .factura-num { text-align: right; }
+      .factura-num .num { font-size: 22px; font-weight: 900; color: #2563eb; }
+      .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+      .info-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; }
+      .info-box h3 { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 8px; }
+      .info-box p { font-size: 13px; color: #334155; margin-bottom: 3px; }
+      table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+      thead th { background: #1e3a8a; color: white; padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 600; }
+      tbody tr:nth-child(even) { background: #f8fafc; }
+      tbody td { padding: 10px 12px; font-size: 13px; color: #334155; border-bottom: 1px solid #e2e8f0; }
+      .totals { max-width: 300px; margin-left: auto; }
+      .totals .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; border-bottom: 1px dashed #e2e8f0; }
+      .totals .total-row { display: flex; justify-content: space-between; padding: 12px 0; font-size: 18px; font-weight: 900; border-top: 2px solid #2563eb; }
+      .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 16px; }
+    </style>
+  </head><body>
+    <div class="header">
+      <div class="logo-area">
+        <h1>TallerPro</h1>
+        <p style="color:#6b7280; font-size:12px;">Sistema de Gestión Automotriz</p>
+      </div>
+      <div class="factura-num">
+        <div class="num">' || v_factura.numero || '</div>
+        <div style="font-size:12px; color:#6b7280;">Fecha: ' || TO_CHAR(v_factura.fecha, 'DD/MM/YYYY') || '</div>
+      </div>
+    </div>
+    <div class="info-grid">
+      <div class="info-box">
+        <h3>Cliente</h3>
+        <p style="font-size:15px; font-weight:700;">' || v_orden.cliente_nombre || '</p>
+        <p>CI: ' || COALESCE(v_orden.ci, '—') || '</p>
+        <p>Tel: ' || COALESCE(v_orden.telefono, '—') || '</p>
+        <p>Email: ' || COALESCE(v_orden.email, '—') || '</p>
+      </div>
+      <div class="info-box">
+        <h3>Vehículo</h3>
+        <p style="font-size:15px; font-weight:700;">' || v_orden.placa || '</p>
+        <p>' || v_orden.marca || ' ' || v_orden.modelo || ' ' || v_orden.año || '</p>
+        <p>OT: ' || v_orden.numero || '</p>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Descripción</th>
+          <th style="text-align:center">Tipo</th>
+          <th style="text-align:center">Cant.</th>
+          <th style="text-align:right">P. Unitario</th>
+          <th style="text-align:right">Total</th>
+        </tr>
+      </thead>
+      <tbody>';
+
+  IF v_cotizacion IS NOT NULL THEN
+    v_html := v_html || (
+      SELECT STRING_AGG('<tr><td>' || (linea->>'descripcion') || '</td><td style="text-align:center; font-size:11px">' ||
+        CASE WHEN (linea->>'tipo') = 'mano_de_obra' THEN 'Mano de obra' WHEN (linea->>'tipo') = 'diagnostico' THEN 'Diagnóstico' ELSE 'Repuesto' END ||
+        '</td><td style="text-align:center">' || (linea->>'cantidad') || '</td><td style="text-align:right">$' || (linea->>'precioUnitario') || '</td><td style="text-align:right; font-weight:600">$' ||
+        TO_CHAR(((linea->>'cantidad')::INT * (linea->>'precioUnitario')::DECIMAL), '999999.99') || '</td></tr>', '')
+      FROM jsonb_array_elements(v_cotizacion -> 'lineas') AS linea
+    );
+  END IF;
+
+  v_html := v_html || '</tbody></table>
+    <div class="totals">
+      <div class="row"><span>Subtotal</span><span>$' || TO_CHAR(v_factura.subtotal, '999999.99') || '</span></div>
+      <div class="row"><span>IVA (12%)</span><span>$' || TO_CHAR(v_factura.iva, '999999.99') || '</span></div>
+      <div class="total-row"><span>TOTAL</span><span>$' || TO_CHAR(v_factura.total, '999999.99') || '</span></div>
+    </div>
+    <div class="footer">
+      <p><strong>TallerPro — Factura Electrónica</strong></p>
+      <p>Gracias por su preferencia — Este documento es válido como comprobante de pago</p>
+    </div>
+  </body></html>';
+
+  RETURN json_build_object('ok', TRUE, 'html', v_html);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION generar_html_factura(UUID) TO anon, authenticated;
+
+-- ─── RPC: guardar_url_pdf_factura ───────────────────────
+CREATE OR REPLACE FUNCTION guardar_url_pdf_factura(p_factura_id UUID, p_url_pdf TEXT)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE invoices SET url_pdf = p_url_pdf WHERE id = p_factura_id;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Factura no encontrada');
+  END IF;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION guardar_url_pdf_factura(UUID, TEXT) TO anon, authenticated;
+
+-- ─── RPC: obtener_factura_por_orden ─────────────────────
+CREATE OR REPLACE FUNCTION obtener_factura_por_orden(p_orden_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_build_object(
+      'id', id, 'ordenId', order_id, 'pagoId', payment_id,
+      'numero', numero, 'subtotal', subtotal, 'iva', iva, 'total', total,
+      'urlPdf', url_pdf, 'fecha', fecha
+    )
+    FROM invoices
+    WHERE order_id = p_orden_id
+    ORDER BY fecha DESC
+    LIMIT 1
+  ), json_build_object('ok', FALSE, 'error', 'Factura no encontrada'));
+END;
+$$;
+GRANT EXECUTE ON FUNCTION obtener_factura_por_orden(UUID) TO anon, authenticated;
+
+-- =========================================================
+-- HU-4.3: Reportes de ingresos y productividad
+-- =========================================================
+
+-- ─── RPC: reporte_ingresos ───────────────────────────────
+CREATE OR REPLACE FUNCTION reporte_ingresos(p_fecha_inicio DATE, p_fecha_fin DATE)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN json_build_object(
+    'periodo', json_build_object('desde', p_fecha_inicio, 'hasta', p_fecha_fin),
+    'ingresos', COALESCE((
+      SELECT json_agg(json_build_object(
+        'id', i.id, 'numero', i.numero, 'fecha', i.fecha,
+        'subtotal', i.subtotal, 'iva', i.iva, 'total', i.total
+      ) ORDER BY i.fecha DESC)
+      FROM invoices i
+      WHERE i.fecha::DATE BETWEEN p_fecha_inicio AND p_fecha_fin
+    ), '[]'::json),
+    'totalIngresos', COALESCE((
+      SELECT SUM(total)::DECIMAL FROM invoices
+      WHERE fecha::DATE BETWEEN p_fecha_inicio AND p_fecha_fin
+    ), 0),
+    'cantidadFacturas', COALESCE((
+      SELECT COUNT(*) FROM invoices
+      WHERE fecha::DATE BETWEEN p_fecha_inicio AND p_fecha_fin
+    ), 0)
+  );
+END;
+$$;
+GRANT EXECUTE ON FUNCTION reporte_ingresos(DATE, DATE) TO authenticated;
+
+-- ─── RPC: reporte_productividad ──────────────────────────
+CREATE OR REPLACE FUNCTION reporte_productividad()
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_productividad JSON;
+  v_total_ordenes BIGINT;
+  v_total_ingreso DECIMAL;
+BEGIN
+  WITH productividad_mecanicos AS (
+    SELECT
+      u.id as mecanicoId,
+      u.nombre as mecanicoNombre,
+      COUNT(DISTINCT ot.id) as ordenesFinalizadas,
+      COALESCE(SUM(i.total), 0) as ingresoTotal
+    FROM usuarios u
+    LEFT JOIN ordenes_trabajo ot ON u.id = ot.mecanico_id AND ot.estado = 'finalizada' AND ot.deleted_at IS NULL
+    LEFT JOIN invoices i ON ot.id = i.order_id
+    WHERE u.rol = 'mecanico' AND u.activo = TRUE
+    GROUP BY u.id, u.nombre
+  )
+  SELECT json_agg(json_build_object(
+    'mecanicoId', mecanicoId,
+    'mecanicoNombre', mecanicoNombre,
+    'ordenesFinalizadas', ordenesFinalizadas,
+    'ingresoTotal', ingresoTotal
+  ) ORDER BY ordenesFinalizadas DESC)
+  INTO v_productividad
+  FROM productividad_mecanicos;
+
+  SELECT COUNT(*) INTO v_total_ordenes
+  FROM ordenes_trabajo
+  WHERE estado = 'finalizada' AND deleted_at IS NULL;
+
+  SELECT COALESCE(SUM(total), 0) INTO v_total_ingreso
+  FROM invoices;
+
+  RETURN json_build_object(
+    'productividad', COALESCE(v_productividad, '[]'::json),
+    'totalOrdenesFinalizadas', v_total_ordenes,
+    'totalIngresoGenerado', v_total_ingreso
+  );
+END;
+$$;
+GRANT EXECUTE ON FUNCTION reporte_productividad() TO authenticated;
+
+-- ─── RPC: reporte_valor_inventario ───────────────────────
+CREATE OR REPLACE FUNCTION reporte_valor_inventario()
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN json_build_object(
+    'inventario', COALESCE((
+      SELECT json_agg(json_build_object(
+        'id', r.id, 'nombre', r.nombre, 'categoria', r.categoria,
+        'cantidad', r.cantidad, 'costo', r.costo, 'margenGanancia', r.margen_ganancia,
+        'precio', r.precio, 'valor_total', (r.cantidad * r.costo)::DECIMAL, 'stockMinimo', r.stock_minimo
+      ) ORDER BY (r.cantidad * r.costo) DESC)
+      FROM repuestos r
+      WHERE r.deleted_at IS NULL
+    ), '[]'::json),
+    'totalRepuestos', (
+      SELECT COUNT(*) FROM repuestos WHERE deleted_at IS NULL
+    ),
+    'valorTotalInventario', COALESCE((
+      SELECT SUM((cantidad * costo)::DECIMAL) FROM repuestos
+      WHERE deleted_at IS NULL
+    ), 0),
+    'cantidadTotalUnidades', COALESCE((
+      SELECT SUM(cantidad) FROM repuestos
+      WHERE deleted_at IS NULL
+    ), 0)
+  );
+END;
+$$;
+GRANT EXECUTE ON FUNCTION reporte_valor_inventario() TO authenticated;
 
 -- =========================================================
 -- HU-2.5: Control de Calidad (QC)
@@ -2718,3 +3241,198 @@ BEGIN
 END;
 $$;
 GRANT EXECUTE ON FUNCTION obtener_alertas_inventario() TO anon, authenticated;
+
+-- =========================================================
+-- HU-5: Configuración y Gestión de Personal
+-- =========================================================
+
+-- ─── TABLA: personal_taller ──────────────────────────────
+CREATE TABLE IF NOT EXISTS personal_taller (
+  id             UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  nombre         VARCHAR(100) NOT NULL,
+  cargo          VARCHAR(50) NOT NULL,
+  especialidad   VARCHAR(100),
+  telefono       VARCHAR(20),
+  email          VARCHAR(100),
+  estado         VARCHAR(20) NOT NULL DEFAULT 'activo' CHECK (estado IN ('activo', 'inactivo', 'vacaciones')),
+  usuario_id     UUID REFERENCES usuarios(id) ON DELETE SET NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at     TIMESTAMPTZ
+);
+ALTER TABLE personal_taller ENABLE ROW LEVEL SECURITY;
+
+-- ─── TABLA: catalogs ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS catalogs (
+  id             UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  clave          VARCHAR(100) NOT NULL UNIQUE,
+  valor          JSONB NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE catalogs ENABLE ROW LEVEL SECURITY;
+
+-- ─── RPC: listar_personal ───────────────────────────────
+CREATE OR REPLACE FUNCTION listar_personal()
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', id, 'nombre', nombre, 'cargo', cargo, 'especialidad', especialidad,
+      'telefono', telefono, 'email', email, 'estado', estado, 'usuarioId', usuario_id
+    ) ORDER BY nombre)
+    FROM personal_taller
+    WHERE deleted_at IS NULL
+  ), '[]'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION listar_personal() TO anon, authenticated;
+
+-- ─── RPC: crear_personal ────────────────────────────────
+CREATE OR REPLACE FUNCTION crear_personal(
+  p_nombre VARCHAR, p_cargo VARCHAR, p_especialidad VARCHAR,
+  p_telefono VARCHAR, p_email VARCHAR, p_estado VARCHAR, p_usuario_id UUID
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_id UUID;
+BEGIN
+  INSERT INTO personal_taller (nombre, cargo, especialidad, telefono, email, estado, usuario_id)
+  VALUES (p_nombre, p_cargo, p_especialidad, p_telefono, p_email, p_estado, p_usuario_id)
+  RETURNING id INTO v_id;
+
+  RETURN json_build_object('ok', TRUE, 'id', v_id);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION crear_personal(VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, UUID) TO anon, authenticated;
+
+-- ─── RPC: actualizar_personal ───────────────────────────
+CREATE OR REPLACE FUNCTION actualizar_personal(
+  p_id UUID, p_nombre VARCHAR, p_cargo VARCHAR, p_especialidad VARCHAR,
+  p_telefono VARCHAR, p_email VARCHAR, p_estado VARCHAR, p_usuario_id UUID
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE personal_taller
+  SET nombre = p_nombre, cargo = p_cargo, especialidad = p_especialidad,
+      telefono = p_telefono, email = p_email, estado = p_estado, usuario_id = p_usuario_id
+  WHERE id = p_id AND deleted_at IS NULL;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Personal no encontrado');
+  END IF;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION actualizar_personal(UUID, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, UUID) TO anon, authenticated;
+
+-- ─── RPC: eliminar_personal ─────────────────────────────
+CREATE OR REPLACE FUNCTION eliminar_personal(p_id UUID)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  UPDATE personal_taller SET deleted_at = NOW() WHERE id = p_id;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Personal no encontrado');
+  END IF;
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION eliminar_personal(UUID) TO anon, authenticated;
+
+-- ─── RPC: guardar_catalogs ──────────────────────────────
+CREATE OR REPLACE FUNCTION guardar_catalogs(
+  p_clave VARCHAR, p_valor JSONB
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO catalogs (clave, valor, updated_at)
+  VALUES (p_clave, p_valor, NOW())
+  ON CONFLICT (clave)
+  DO UPDATE SET valor = p_valor, updated_at = NOW();
+
+  RETURN json_build_object('ok', TRUE);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION guardar_catalogs(VARCHAR, JSONB) TO anon, authenticated;
+
+-- ─── RPC: obtener_catalogs ──────────────────────────────
+CREATE OR REPLACE FUNCTION obtener_catalogs()
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_result JSON;
+BEGIN
+  SELECT json_object_agg(clave, valor)
+  INTO v_result
+  FROM catalogs;
+
+  RETURN COALESCE(v_result, '{}'::json);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION obtener_catalogs() TO anon, authenticated;
+
+-- ─── RPC: asignar_mecanico_orden ────────────────────────
+CREATE OR REPLACE FUNCTION asignar_mecanico_orden(
+  p_orden_id UUID,
+  p_mecanico_id UUID
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_orden ordenes_trabajo%ROWTYPE;
+  v_mecanico usuarios%ROWTYPE;
+  v_rows_updated INT;
+BEGIN
+  -- Validar que la orden existe
+  SELECT * INTO v_orden FROM ordenes_trabajo
+  WHERE id = p_orden_id AND deleted_at IS NULL;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Orden no encontrada', 'orden_id', p_orden_id::TEXT);
+  END IF;
+
+  -- Validar que el mecánico existe y tiene rol 'mecanico'
+  SELECT * INTO v_mecanico FROM usuarios
+  WHERE id = p_mecanico_id AND rol = 'mecanico' AND activo = TRUE;
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'Mecánico no encontrado o no activo', 'mecanico_id', p_mecanico_id::TEXT);
+  END IF;
+
+  -- Asignar mecánico a la orden
+  UPDATE ordenes_trabajo
+  SET mecanico_id = p_mecanico_id, fecha_actualizacion = CURRENT_DATE
+  WHERE id = p_orden_id;
+
+  GET DIAGNOSTICS v_rows_updated = ROW_COUNT;
+  IF v_rows_updated = 0 THEN
+    RETURN json_build_object('ok', FALSE, 'error', 'No se pudo actualizar la orden');
+  END IF;
+
+  -- Registrar en auditoría sin validar usuario (evita constraint)
+  BEGIN
+    INSERT INTO logs_auditoria (usuario_nombre, accion, modulo, detalles, entidad_id, entidad_tipo)
+    VALUES (v_mecanico.nombre, 'ASIGNACION_MECANICO', 'Órdenes',
+            'Mecánico asignado a la orden de trabajo', p_orden_id, 'OrdenTrabajo');
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+
+  RETURN json_build_object('ok', TRUE, 'mecanico', v_mecanico.nombre, 'orden_numero', v_orden.numero);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION asignar_mecanico_orden(UUID, UUID) TO anon, authenticated;

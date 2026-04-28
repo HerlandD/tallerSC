@@ -80,12 +80,26 @@ function PersonalTab() {
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!validate()) return;
-    if (editId) { updatePersonal(editId, form); toast.success('Personal actualizado'); }
-    else { addPersonal(form); toast.success('Personal registrado'); }
-    setModalOpen(false);
+    setSaving(true);
+    try {
+      if (editId) {
+        await updatePersonal(editId, form);
+        toast.success('Personal actualizado');
+      } else {
+        await addPersonal(form);
+        toast.success('Personal registrado');
+      }
+      setModalOpen(false);
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Error al guardar');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const getUsuarioLinked = (usuarioId?: string) => usuarioId ? usuarios.find(u => u.id === usuarioId)?.nombre : null;
@@ -101,14 +115,14 @@ function PersonalTab() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {personal.map(p => {
-          const cfg = estadoPersonalConfig[p.estado];
+          const cfg = estadoPersonalConfig[p.estado as keyof typeof estadoPersonalConfig];
           const linkedUser = getUsuarioLinked(p.usuarioId);
           return (
             <div key={p.id} className="bg-white rounded-xl border border-gray-200 p-5">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
-                    <span className="text-blue-700 font-bold text-sm">{p.nombre.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}</span>
+                    <span className="text-blue-700 font-bold text-sm">{p.nombre.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}</span>
                   </div>
                   <div>
                     <p className="font-semibold text-gray-800 text-sm">{p.nombre}</p>
@@ -192,13 +206,13 @@ function PersonalTab() {
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setModalOpen(false)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition-colors">Cancelar</button>
-                <button type="submit" className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors">{editId ? 'Actualizar' : 'Registrar'}</button>
+                <button type="submit" disabled={saving} className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors disabled:opacity-60">{saving ? 'Guardando…' : editId ? 'Actualizar' : 'Registrar'}</button>
               </div>
             </form>
           </div>
         </div>
       )}
-      {deleteConfirm && <DeleteConfirm onConfirm={() => { deletePersonal(deleteConfirm); setDeleteConfirm(null); toast.success('Personal eliminado'); }} onCancel={() => setDeleteConfirm(null)} />}
+      {deleteConfirm && <DeleteConfirm onConfirm={async () => { await deletePersonal(deleteConfirm); setDeleteConfirm(null); toast.success('Personal eliminado'); }} onCancel={() => setDeleteConfirm(null)} />}
     </div>
   );
 }
@@ -206,7 +220,7 @@ function PersonalTab() {
 // ─── USUARIOS TAB ──────────────────────────────────────────────────────────────
 
 type UsuarioForm = Omit<Usuario, 'id'>;
-const emptyUsuario: UsuarioForm = { nombre: '', username: '', password: '', rol: 'asesor', activo: true };
+const emptyUsuario: UsuarioForm = { nombre: '', username: '', password: '', rol: 'asesor', activo: true, direccion: '' };
 
 function UsuariosTab() {
   const { usuarios, addUsuario, updateUsuario, currentUser } = useApp();
@@ -230,13 +244,18 @@ function UsuariosTab() {
   });
 
   const openCreate = () => { setEditId(null); setForm(emptyUsuario); setErrors({}); setShowPass(false); setModalOpen(true); };
-  const openEdit = (u: Usuario) => { setEditId(u.id); setForm({ nombre: u.nombre, username: u.username, password: u.password, rol: u.rol, activo: u.activo }); setErrors({}); setShowPass(false); setModalOpen(true); };
+  const openEdit = (u: Usuario) => { setEditId(u.id); setForm({ nombre: u.nombre, username: u.username, password: u.password, rol: u.rol, activo: u.activo, ci: u.ci, telefono: u.telefono, email: u.email, direccion: u.direccion }); setErrors({}); setShowPass(false); setModalOpen(true); };
 
   const validate = () => {
     const e: Partial<Record<keyof UsuarioForm, string>> = {};
     if (!form.nombre.trim()) e.nombre = 'Nombre requerido';
     if (!form.username.trim()) e.username = 'Usuario requerido';
     if (!editId && (!form.password || form.password.length < 4)) e.password = 'Mínimo 4 caracteres';
+    if (form.rol === 'cliente') {
+      if (!form.ci?.trim()) e.ci = 'CI requerido para clientes';
+      if (!form.telefono?.trim()) e.telefono = 'Teléfono requerido para clientes';
+      if (!form.email?.trim()) e.email = 'Email requerido para clientes';
+    }
     const dup = usuarios.find(u => u.username === form.username && u.id !== editId);
     if (dup) e.username = 'Usuario ya existe';
     setErrors(e); return Object.keys(e).length === 0;
@@ -354,7 +373,7 @@ function UsuariosTab() {
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold ${u.activo ? 'bg-gray-100 text-gray-600' : 'bg-gray-50 text-gray-400'}`}>
-                          {u.nombre.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                          {u.nombre.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
                         </div>
                         <div>
                           <p className="text-sm font-medium text-gray-800">{u.nombre}</p>
@@ -434,6 +453,33 @@ function UsuariosTab() {
                   {rolOptions.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
               </div>
+              {form.rol === 'cliente' && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm text-gray-700 mb-1.5">Cédula de Identidad (CI) *</label>
+                      <input value={form.ci || ''} onChange={e => setForm({ ...form, ci: e.target.value })} placeholder="Ej: 1234567" className={inputCls(errors.ci)} />
+                      {errors.ci && <p className="text-xs text-red-500 mt-1">{errors.ci}</p>}
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-700 mb-1.5">Teléfono *</label>
+                      <input value={form.telefono || ''} onChange={e => setForm({ ...form, telefono: e.target.value })} placeholder="Ej: 71234567" className={inputCls(errors.telefono)} />
+                      {errors.telefono && <p className="text-xs text-red-500 mt-1">{errors.telefono}</p>}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm text-gray-700 mb-1.5">Email *</label>
+                      <input type="email" value={form.email || ''} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="correo@ejemplo.com" className={inputCls(errors.email)} />
+                      {errors.email && <p className="text-xs text-red-500 mt-1">{errors.email}</p>}
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-700 mb-1.5">Dirección</label>
+                      <input value={form.direccion || ''} onChange={e => setForm({ ...form, direccion: e.target.value })} placeholder="Ej: Av. Principal 123" className={inputCls(errors.direccion)} />
+                    </div>
+                  </div>
+                </>
+              )}
               <label className="flex items-center gap-2.5 cursor-pointer">
                 <input type="checkbox" checked={form.activo} onChange={e => setForm({ ...form, activo: e.target.checked })} className="w-4 h-4 accent-blue-600" />
                 <span className="text-sm text-gray-700">Usuario activo</span>
@@ -501,7 +547,7 @@ function CatalogosTab() {
   };
 
   const removeMarca = (i: number) => {
-    const updated = catalogs.marcas.filter((_, idx) => idx !== i);
+    const updated = catalogs.marcas.filter((_: any, idx: number) => idx !== i);
     updateCatalogs({ marcas: updated });
     if (selectedMarca === i) setSelectedMarca(null);
     toast.success('Marca eliminada');
@@ -509,14 +555,14 @@ function CatalogosTab() {
 
   const addModelo = (marcaIdx: number) => {
     if (!newModelo.trim()) return;
-    const updated = catalogs.marcas.map((m, i) => i === marcaIdx ? { ...m, modelos: [...m.modelos, newModelo.trim()] } : m);
+    const updated = catalogs.marcas.map((m: any, i: number) => i === marcaIdx ? { ...m, modelos: [...m.modelos, newModelo.trim()] } : m);
     updateCatalogs({ marcas: updated });
     setNewModelo('');
     toast.success('Modelo agregado');
   };
 
   const removeModelo = (marcaIdx: number, modeloIdx: number) => {
-    const updated = catalogs.marcas.map((m, i) => i === marcaIdx ? { ...m, modelos: m.modelos.filter((_, j) => j !== modeloIdx) } : m);
+    const updated = catalogs.marcas.map((m: any, i: number) => i === marcaIdx ? { ...m, modelos: m.modelos.filter((_: any, j: number) => j !== modeloIdx) } : m);
     updateCatalogs({ marcas: updated });
   };
 
@@ -576,7 +622,7 @@ function CatalogosTab() {
               <button onClick={addMarca} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors">Agregar</button>
             </div>
             <div className="space-y-1 max-h-48 overflow-y-auto">
-              {catalogs.marcas.map((m, i) => (
+              {catalogs.marcas.map((m: any, i: number) => (
                 <div key={i} onClick={() => setSelectedMarca(selectedMarca === i ? null : i)}
                   className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-all ${selectedMarca === i ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50 border border-transparent'}`}>
                   <span className="text-sm font-medium text-gray-700">{m.nombre} <span className="text-gray-400 text-xs">({m.modelos.length} modelos)</span></span>
@@ -595,7 +641,7 @@ function CatalogosTab() {
                   <button onClick={() => addModelo(selectedMarca!)} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors">Agregar</button>
                 </div>
                 <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
-                  {catalogs.marcas[selectedMarca]?.modelos.map((mod, j) => (
+                  {catalogs.marcas[selectedMarca]?.modelos.map((mod: string, j: number) => (
                     <div key={j} className="flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full text-sm">
                       {mod} <button onClick={() => removeModelo(selectedMarca!, j)} className="text-blue-400 hover:text-red-600 ml-1"><X size={11} /></button>
                     </div>

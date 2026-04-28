@@ -42,6 +42,9 @@ export default function Reportes() {
   const periodoLabel: Record<Periodo,string> = { hoy:'Hoy', semana:'Esta semana', mes:'Este mes', trimestre:'Trimestre', año:'Este año' };
   const periodos: Periodo[] = ['hoy','semana','mes','trimestre','año'];
 
+  // Stock bajo (repuestos con cantidad por debajo del mínimo)
+  const stockBajo = (reporteInventario?.inventario || []).filter((r: any) => r.cantidad <= (r.stockMinimo || 5));
+
   // Load reports from RPC functions
   const cargarReportes = async () => {
     if (!currentUser) return;

@@ -261,7 +261,7 @@ function RepuestosPanel({
   repuestos: Repuesto[]; proveedores: Proveedor[]; stockBajo: Repuesto[];
   canEdit: boolean; showProveedorInfo: boolean;
   addRepuesto: (r: Omit<Repuesto, 'id'>) => Promise<{ ok: boolean; error?: string }>;
-  updateRepuesto: (id: string, r: Partial<Repuesto>) => void;
+  updateRepuesto: (id: string, r: Partial<Repuesto>) => Promise<{ ok: boolean; error?: string }>;
   deleteRepuesto: (id: string) => void;
   registrarSalidaRepuesto: (id: string, cant: number, ordenId?: string) => boolean;
   addStockRepuesto: (id: string, cant: number, costo?: number, proveedorId?: string) => void;
@@ -289,10 +289,12 @@ function RepuestosPanel({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const precio = form.costo > 0 ? Number((form.costo * (1 + form.margenGanancia)).toFixed(2)) : form.precio;
-    if (editId) { updateRepuesto(editId, { ...form, precio }); toast.success('Repuesto actualizado'); }
-    else {
-      const result = await addRepuesto({ ...form, precio, cantidadReservada: 0 });
+    if (editId) {
+      const result = await updateRepuesto(editId, form);
+      if (result.ok) { toast.success('Repuesto actualizado'); }
+      else { toast.error(result.error || 'Error al actualizar repuesto'); return; }
+    } else {
+      const result = await addRepuesto({ ...form, cantidadReservada: 0 });
       if (result.ok) { toast.success('Repuesto agregado'); }
       else { toast.error(result.error || 'Error al agregar repuesto'); return; }
     }
@@ -491,8 +493,15 @@ function RepuestosPanel({
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Proveedor</label>
-                  <select value={form.proveedorId || ''} onChange={e => setForm({ ...form, proveedorId: e.target.value })} className={inCls}>
+                  <select 
+                    value={form.proveedorId || ''} 
+                    onChange={e => setForm({ ...form, proveedorId: e.target.value })} 
+                    className={inCls}
+                  >
                     <option value="">Sin proveedor</option>
+                    {proveedores.map(p => (
+                      <option key={p.id} value={p.id}>{p.nombre}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -537,8 +546,15 @@ function RepuestosPanel({
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Proveedor</label>
-                <select value={entradaProveedor} onChange={e => setEntradaProveedor(e.target.value)} className={inCls}>
+                <select 
+                  value={entradaProveedor} 
+                  onChange={e => setEntradaProveedor(e.target.value)} 
+                  className={inCls}
+                >
                   <option value="">Sin proveedor</option>
+                  {proveedores.map(p => (
+                    <option key={p.id} value={p.id}>{p.nombre}</option>
+                  ))}
                 </select>
               </div>
             </div>

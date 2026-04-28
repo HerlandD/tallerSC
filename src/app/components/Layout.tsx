@@ -149,6 +149,7 @@ export function Layout() {
   const notiColors: Record<string, string> = {
     stock_bajo: 'bg-amber-100 text-amber-700',
     nueva_cita: 'bg-blue-100 text-blue-700',
+    cita_confirmada: 'bg-green-100 text-green-700',
     cotizacion_pendiente: 'bg-violet-100 text-violet-700',
     qc_rechazado: 'bg-red-100 text-red-700',
     pago_recibido: 'bg-green-100 text-green-700',

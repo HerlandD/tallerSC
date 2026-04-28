@@ -585,7 +585,7 @@ export default function Appointments() {
       clienteId: recepcionCita!.clienteId,
       vehiculoId: recepcionCita!.vehiculoId,
       descripcionProblema: descripcion,
-      estado: 'en_diagnostico', // already past 'registrada' since reception is done
+      estado: 'registrada', // Must be 'registrada' so Jefe de Taller can assign a mechanic
       citaId: recepcionCita!.id,
       creadoPor: currentUser?.id,
       recepcion: { ...recepcion, fotos },
@@ -756,7 +756,7 @@ export default function Appointments() {
               </button>
             </div>
           ) : filtered.map(c => {
-            const cfg = estadoCitaConfig[c.estado];
+            const cfg = estadoCitaConfig[c.estado as EstadoCita];
             const veh = vehiculos.find(v => v.id === c.vehiculoId);
             const isToday = c.fecha === today;
             const otAsociada = ordenes.find(o => o.citaId === c.id);
@@ -815,7 +815,7 @@ export default function Appointments() {
                 {filtered.length === 0 ? (
                   <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-sm">No se encontraron citas</td></tr>
                 ) : filtered.map(c => {
-                  const cfg = estadoCitaConfig[c.estado];
+                  const cfg = estadoCitaConfig[c.estado as EstadoCita];
                   const veh = vehiculos.find(v => v.id === c.vehiculoId);
                   const cli = clientes.find(cl => cl.id === c.clienteId);
                   const isToday = c.fecha === today;
@@ -867,7 +867,21 @@ export default function Appointments() {
                           {canManage && c.estado === 'pendiente' && (
                             <button onClick={async () => {
                               const r = await confirmarCita(c.id);
-                              r.ok ? toast.success('Cita confirmada') : toast.error(r.error ?? 'Error al confirmar');
+                              if (r.ok) {
+                                toast.success('Cita confirmada y notificada al jefe de taller');
+                                const cliente = clientes.find(x => x.id === c.clienteId);
+                                const vehiculo = vehiculos.find(x => x.id === c.vehiculoId);
+                                await addNotificacion({
+                                  tipo: 'cita_confirmada',
+                                  titulo: 'Nueva cita confirmada',
+                                  mensaje: `Cita confirmada: ${cliente?.nombre || 'Cliente'} - ${vehiculo?.placa || 'Vehículo'} el ${c.fecha} a las ${c.hora}`,
+                                  paraRol: 'jefe_taller',
+                                  referenciaId: c.id,
+                                  referenciaTipo: 'cita',
+                                });
+                              } else {
+                                toast.error(r.error ?? 'Error al confirmar');
+                              }
                             }}
                               className="flex items-center gap-1 px-2.5 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold">
                               <CheckCircle size={12} /> Confirmar
@@ -1010,7 +1024,7 @@ export default function Appointments() {
                         onChange={e => setForm({ ...form, tipoServicio: e.target.value })}
                         className={inCls(errors.tipoServicio)}>
                         <option value="">Seleccionar...</option>
-                        {catalogs.tiposServicio.map(t => <option key={t} value={t}>{t}</option>)}
+                        {catalogs.tiposServicio.map((t: string) => <option key={t} value={t}>{t}</option>)}
                       </select>
                       {errors.tipoServicio && <p className="text-xs text-red-500 mt-1">{errors.tipoServicio}</p>}
                     </div>
@@ -1020,7 +1034,7 @@ export default function Appointments() {
                         onChange={e => setForm({ ...form, motivoIngreso: e.target.value })}
                         className={inCls(errors.motivoIngreso)}>
                         <option value="">Seleccionar...</option>
-                        {catalogs.motivosIngreso.map(m => <option key={m} value={m}>{m}</option>)}
+                        {catalogs.motivosIngreso.map((m: string) => <option key={m} value={m}>{m}</option>)}
                       </select>
                       {errors.motivoIngreso && <p className="text-xs text-red-500 mt-1">{errors.motivoIngreso}</p>}
                     </div>

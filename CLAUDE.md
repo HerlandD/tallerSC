@@ -19,20 +19,84 @@ No test runner or linter is currently configured.
 ### Key entry points
 
 - [src/main.tsx](src/main.tsx) — React entry, mounts `<AppProvider>` wrapping `<App>`
-- [src/app/context/AppContext.tsx](src/app/context/AppContext.tsx) — single global context that holds all state: current user, all CRUD entities, notifications, audit logging, and catalog data. Access it with `useApp()`.
+- [src/app/context/AppContext.tsx](src/app/context/AppContext.tsx) — global context that orchestrates all hooks. Access it with `useApp()`. **Do not add logic here**—use hooks instead.
 - [src/lib/supabase.ts](src/lib/supabase.ts) — Supabase client initialization and all TypeScript interfaces for DB types.
 - [src/app/routes.ts](src/app/routes.ts) — React Router route definitions.
 - [src/app/App.tsx](src/app/App.tsx) — Root component; renders `<Layout>` with role-filtered navigation.
 
-### Database access pattern (critical)
+### Frontend architecture: Services + Hooks pattern
 
-**All database operations go through Supabase RPC functions, never direct table access.** Row-Level Security blocks direct queries. Every RPC call follows this pattern:
+The frontend is organized by **domain/epic** (aligned with Jira), not by layer:
 
-```ts
-const { data, error } = await supabase.rpc('nombre_funcion', { param1, param2 });
+```
+src/
+├── services/              ← Pure RPC calls (no React)
+│   ├── authService.ts            (auth, login, register)
+│   ├── usuariosService.ts        (users, personal)
+│   ├── clientesService.ts        (clients, vehicles)
+│   ├── citasService.ts           (appointments)
+│   ├── ordenesService.ts         (work orders, QC, notes)
+│   ├── inventarioService.ts      (parts, stock, suppliers)
+│   ├── pagosService.ts           (payments, invoices)
+│   ├── reportesService.ts        (reports)
+│   └── transversalService.ts     (notifications, audit, catalogs)
+│
+├── hooks/                ← State + Logic (React)
+│   ├── useAuth.ts                (session, login)
+│   ├── useUsuarios.ts            (users CRUD)
+│   ├── useClientes.ts            (clients/vehicles CRUD)
+│   ├── useCitas.ts               (appointments CRUD)
+│   ├── useOrdenes.ts             (work orders + details)
+│   ├── useInventario.ts          (inventory + stock)
+│   ├── usePagos.ts               (payments + invoices)
+│   ├── useReportes.ts            (report generation)
+│   └── useTransversal.ts         (notifications, audit, catalogs)
+│
+└── app/context/
+    └── AppContext.tsx            (assembles all hooks into context)
 ```
 
-Mutation functions return `{ ok: boolean; error?: string }`. The 80+ RPC functions are defined in [database-setup.sql](database-setup.sql) and cover the full lifecycle of all entities.
+**Data flow:**
+1. Component calls hook (e.g., `useOrdenes()`)
+2. Hook manages state with `useState`
+3. Hook calls service function
+4. Service calls `supabase.rpc()`
+5. Hook updates state with response
+
+**Example:**
+```ts
+// In hooks/useOrdenes.ts
+const addOrden = async (o: OrdenTrabajo) => {
+  const { data, error } = await ordenesService.crear(o);  // Call service
+  if (!error) setOrdenes([...ordenes, data.orden]);       // Update state
+  return { ok: !error };
+};
+
+// In a component
+const { ordenes, addOrden } = useOrdenes();  // Destructure from hook
+const result = await addOrden(nuevoOrden);   // Call hook method
+```
+
+**Rules:**
+- ✅ Services call RPC functions only
+- ✅ Hooks manage state, call services, expose methods
+- ✅ AppContext assembles hooks, no logic inside it
+- ❌ Never put business logic in AppContext
+- ❌ Never call `supabase.rpc()` from components directly
+
+### Database access pattern (critical)
+
+**All database operations go through Supabase RPC functions, never direct table access.** Row-Level Security blocks direct queries. Every RPC call is made **via a service**, never directly from components:
+
+```ts
+// ❌ Wrong: Never call RPC directly from components
+const { data } = await supabase.rpc('crear_orden', {...});
+
+// ✅ Correct: Call via service
+const { data } = await ordenesService.crear(o);  // service makes the RPC call
+```
+
+Services in `src/services/` wrap RPC calls. Mutation functions return `{ ok: boolean; error?: string }`. The 80+ RPC functions are defined in [database-setup.sql](database-setup.sql) and cover the full lifecycle of all entities.
 
 ### Authentication
 
@@ -59,6 +123,41 @@ Mutation functions return `{ ok: boolean; error?: string }`. The 80+ RPC functio
 ### Environment variables
 
 Supabase credentials are in `.env` as `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Both are required at dev and build time.
+
+### Adding new features
+
+When implementing a new feature, follow this flow:
+
+1. **Create RPC function** in [database-setup.sql](database-setup.sql) (if needed)
+2. **Create service** in `src/services/` — wrap RPC calls only
+3. **Create hook** in `src/hooks/` — manage state, call service
+4. **Update AppContext** to expose the hook
+5. **Use in component** — destructure from `useApp()` or call hook directly
+
+Example: Adding a "cancel order" feature
+
+```ts
+// 1. RPC (in database-setup.sql)
+CREATE FUNCTION cancelar_orden(p_orden_id uuid) RETURNS ...
+
+// 2. Service (src/services/ordenesService.ts)
+cancelar: (ordenId: string) =>
+  supabase.rpc('cancelar_orden', { p_orden_id: ordenId }),
+
+// 3. Hook (already in src/hooks/useOrdenes.ts)
+const cancelOrder = async (id: string) => {
+  const { data, error } = await ordenesService.cancelar(id);
+  if (!error) setOrdenes(prev => prev.map(o => ...));
+  return { ok: !error };
+};
+
+// 4. AppContext exports via ordenes hook
+// (no changes needed, already done)
+
+// 5. Component uses it
+const { ordenes, cancelOrder } = useOrdenes();
+await cancelOrder(ordenId);
+```
 
 ### Demo credentials
 

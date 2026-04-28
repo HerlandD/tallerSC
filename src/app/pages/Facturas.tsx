@@ -1,15 +1,51 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Receipt, Download, Search, CheckCircle, Clock, DollarSign,
-  FileText, Building2, User, Car, Printer, X, ChevronDown, ChevronUp
+  FileText, Building2, User, Car, Printer, X, ChevronDown, ChevronUp, AlertCircle
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import logoImg from 'figma:asset/96fbce486018502ff8de5f9de0fab54c7c708ec9.png';
 
 export default function Facturas() {
-  const { facturas, ordenes, clientes, vehiculos, currentUser } = useApp();
+  const { facturas, ordenes, clientes, vehiculos, currentUser, registrarPago, cargarPagosOT, pagosOT } = useApp();
   const [search, setSearch] = useState('');
   const [facturaDetalle, setFacturaDetalle] = useState<typeof facturas[0] | null>(null);
+
+  // ── Registro de pago ──
+  const [ordenIdPago, setOrdenIdPago] = useState('');
+  const [metodoPago, setMetodoPago] = useState<'Efectivo' | 'Tarjeta' | 'QR' | 'Transferencia'>('Efectivo');
+  const [montoPago, setMontoPago] = useState('');
+  const [referenciaPago, setReferenciaPago] = useState('');
+  const [registrando, setRegistrando] = useState(false);
+  const [showPagoForm, setShowPagoForm] = useState(false);
+
+  useEffect(() => {
+    if (facturaDetalle?.ordenId) {
+      cargarPagosOT(facturaDetalle.ordenId);
+    }
+  }, [facturaDetalle?.ordenId]);
+
+  const handleRegistrarPago = async () => {
+    if (!ordenIdPago) return;
+    if (!montoPago || Number(montoPago) <= 0) return;
+    const esDigital = ['Tarjeta', 'QR', 'Transferencia'].includes(metodoPago);
+    if (esDigital && !referenciaPago.trim()) return;
+
+    setRegistrando(true);
+    const res = await registrarPago(ordenIdPago, metodoPago, Number(montoPago), referenciaPago || undefined);
+    if (res.ok) {
+      await cargarPagosOT(ordenIdPago);
+      setOrdenIdPago('');
+      setMontoPago('');
+      setReferenciaPago('');
+      setMetodoPago('Efectivo');
+      setShowPagoForm(false);
+      alert('Pago registrado exitosamente' + (res.confirmado ? ' — Confirmado en línea' : ''));
+    } else {
+      alert(res.error ?? 'Error al registrar pago');
+    }
+    setRegistrando(false);
+  };
 
   const isCliente = currentUser?.rol === 'cliente';
 
@@ -178,6 +214,75 @@ export default function Facturas() {
         </div>
       </div>
 
+      {/* ── Panel de registro de pago ── */}
+      {!isCliente && (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5 mb-6">
+          <button onClick={() => setShowPagoForm(!showPagoForm)} className="w-full flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center">
+                <DollarSign size={18} />
+              </div>
+              <div className="text-left">
+                <p className="font-bold text-gray-900">Registrar Pago</p>
+                <p className="text-xs text-gray-600 mt-0.5">Ingresa un nuevo pago para una orden de trabajo</p>
+              </div>
+            </div>
+            <ChevronDown size={16} className={`text-gray-600 transition-transform ${showPagoForm ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showPagoForm && (
+            <div className="mt-4 pt-4 border-t border-blue-200 space-y-3">
+              {/* Seleccionar orden */}
+              <div>
+                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Orden de Trabajo *</label>
+                <select value={ordenIdPago} onChange={e => setOrdenIdPago(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">Seleccionar OT...</option>
+                  {ordenes.map(o => <option key={o.id} value={o.id}>{o.numero} — {clientes.find(c => c.id === o.clienteId)?.nombre}</option>)}
+                </select>
+              </div>
+
+              {/* Monto */}
+              <div>
+                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Monto $</label>
+                <input type="number" placeholder="0.00" min="0" step="0.01" value={montoPago} onChange={e => setMontoPago(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+
+              {/* Método de pago */}
+              <div>
+                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Método de Pago *</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {(['Efectivo', 'Tarjeta', 'QR', 'Transferencia'] as const).map(m => (
+                    <button key={m} onClick={() => setMetodoPago(m)} type="button"
+                      className={`py-2 px-3 rounded-xl text-xs font-semibold border-2 transition-all ${metodoPago === m ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Referencia para pagos digitales */}
+              {['Tarjeta', 'QR', 'Transferencia'].includes(metodoPago) && (
+                <div>
+                  <label className="text-xs font-bold text-gray-600 uppercase mb-1 flex items-center gap-1 block">
+                    <AlertCircle size={12} /> Referencia (Obligatoria)
+                  </label>
+                  <input type="text" placeholder="Número de transacción, cheque, etc." value={referenciaPago} onChange={e => setReferenciaPago(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              )}
+
+              {/* Botón registrar */}
+              <button onClick={handleRegistrarPago} disabled={!ordenIdPago || !montoPago || registrando || (['Tarjeta', 'QR', 'Transferencia'].includes(metodoPago) && !referenciaPago.trim())}
+                className={`w-full py-2.5 rounded-xl text-sm font-bold transition-all ${ordenIdPago && montoPago && (!['Tarjeta', 'QR', 'Transferencia'].includes(metodoPago) || referenciaPago.trim()) ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
+                {registrando ? 'Registrando...' : '💳 Registrar Pago'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Search */}
       <div className="relative mb-4">
         <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -291,6 +396,21 @@ export default function Facturas() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Pagos confirmados en línea */}
+                    {orden && pagosOT[orden.id]?.some(p => p.confirmado) && (
+                      <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-3">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle size={14} className="text-green-600" />
+                          <div>
+                            <p className="text-xs font-bold text-green-700">Pago confirmado en línea</p>
+                            <p className="text-xs text-green-600 mt-0.5">
+                              {pagosOT[orden.id]?.filter(p => p.confirmado).map(p => `${p.metodo} — $${p.monto.toFixed(2)}`).join(' | ')}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-gray-400 flex items-center gap-1"><CheckCircle size={11} className="text-green-500" /> Método: {f.metodoPago}</span>

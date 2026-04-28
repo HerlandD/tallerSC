@@ -636,7 +636,7 @@ function MecanicoDashboard() {
             ) : misOrdenes.filter(o => !['finalizada', 'cancelada', 'liberada'].includes(o.estado)).map(o => {
               const veh = vehiculos.find(v => v.id === o.vehiculoId);
               const cli = clientes.find(c => c.id === o.clienteId);
-              const cfg = ESTADO_CONFIG[o.estado];
+              const cfg = ESTADO_CONFIG[o.estado as EstadoOrden];
               const tareasTotal = o.tareas?.length || 0;
               const tareasListas = o.tareas?.filter(t => t.estado === 'completada').length || 0;
               return (
@@ -878,9 +878,9 @@ function ClienteDashboard() {
         ) : (
           <div className="divide-y divide-gray-50">
             {[...misOrdenes].reverse().map(o => {
-              const cfg = ESTADO_CONFIG[o.estado];
+              const cfg = ESTADO_CONFIG[o.estado as EstadoOrden];
               const veh = vehiculos.find(v => v.id === o.vehiculoId);
-              const total = o.cotizacion?.lineas.reduce((s, l) => s + l.cantidad * l.precioUnitario, 0) || 0;
+              const total = o.cotizacion?.lineas.reduce((s: any, l: any) => s + l.cantidad * l.precioUnitario, 0) || 0;
               const needsApproval = o.estado === 'esperando_aprobacion';
               return (
                 <div key={o.id} className={`px-5 py-4 ${needsApproval ? 'bg-amber-50/50' : ''}`}>
@@ -955,7 +955,7 @@ function RecentOTsTable({ ordenes, title = 'Órdenes Recientes' }: {
             {ordenes.length === 0 ? (
               <tr><td colSpan={6} className="py-10 text-center text-gray-400 text-sm">Sin órdenes</td></tr>
             ) : ordenes.map(o => {
-              const cfg = ESTADO_CONFIG[o.estado];
+              const cfg = ESTADO_CONFIG[o.estado as EstadoOrden];
               const veh = vehiculos.find(v => v.id === o.vehiculoId);
               const mec = usuarios.find(u => u.id === o.mecanicoId);
               const cli = clientes.find(c => c.id === o.clienteId);

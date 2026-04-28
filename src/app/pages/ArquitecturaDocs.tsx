@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type Tab = 'overview' | 'screens' | 'roles' | 'stack' | 'supabase' | 'flujo';
+type Tab = 'overview' | 'screens' | 'roles' | 'stack' | 'supabase' | 'flujo' | 'frontend';
 
 type Rol = 'administrador' | 'asesor' | 'mecanico' | 'jefe_taller' | 'cliente';
 
@@ -232,9 +232,11 @@ const STACK = [
     color: 'bg-purple-600',
     icon: <GitBranch size={18} />,
     tecnologias: [
-      { nombre: 'React Context API', desc: 'Estado global de la aplicación (AppContext)', version: 'built-in' },
+      { nombre: 'React Context API', desc: 'Orquesta todos los custom hooks (AppContext)', version: 'built-in' },
+      { nombre: 'Custom Hooks', desc: '9 hooks por épica: useAuth, useUsuarios, useClientes, useCitas, useOrdenes, useInventario, usePagos, useReportes, useTransversal', version: 'custom' },
+      { nombre: 'Services Layer', desc: '9 servicios que encapsulan RPC calls (sin React acoplado)', version: 'custom' },
       { nombre: 'React Router v7', desc: 'Enrutamiento SPA con Data Mode', version: '7.x' },
-      { nombre: 'useState / useReducer', desc: 'Estado local por componente', version: 'built-in' },
+      { nombre: 'useState', desc: 'Estado local por hook y componente', version: 'built-in' },
       { nombre: 'react-dnd', desc: 'Drag & drop para el tablero Kanban', version: 'latest' },
     ],
   },
@@ -451,6 +453,55 @@ function TabOverview() {
               </div>
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Patrón Services + Hooks */}
+      <div className="bg-white rounded-xl border border-slate-200 p-6">
+        <h3 className="font-bold text-slate-800 mb-5 flex items-center gap-2">
+          <Zap size={18} className="text-amber-600" />
+          Patrón Arquitectónico: Services + Custom Hooks
+        </h3>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[
+              {
+                capa: 'Services',
+                color: 'bg-emerald-50 border-emerald-200',
+                icon: <Server size={16} className="text-emerald-600" />,
+                desc: 'Encapsulan RPC calls. Sin React, 100% reutilizable.',
+                ejemplo: 'ordenesService.crear(o) → supabase.rpc(...)',
+              },
+              {
+                capa: 'Custom Hooks',
+                color: 'bg-purple-50 border-purple-200',
+                icon: <GitBranch size={16} className="text-purple-600" />,
+                desc: 'Manejan estado con useState. Llaman servicios.',
+                ejemplo: 'useOrdenes() → { ordenes, addOrden, updateOrden... }',
+              },
+              {
+                capa: 'AppContext',
+                color: 'bg-blue-50 border-blue-200',
+                icon: <Layout size={16} className="text-blue-600" />,
+                desc: 'Orquesta todos los hooks. Expone un contexto global.',
+                ejemplo: 'useApp() → { ordenes, clientes, usuarios... }',
+              },
+            ].map(c => (
+              <div key={c.capa} className={`rounded-xl border p-4 ${c.color}`}>
+                <div className="flex items-center gap-2 mb-3">
+                  {c.icon}
+                  <p className="font-semibold text-slate-800 text-sm">{c.capa}</p>
+                </div>
+                <p className="text-xs text-slate-600 mb-2">{c.desc}</p>
+                <p className="text-xs bg-white/60 px-2 py-1 rounded font-mono text-slate-700">{c.ejemplo}</p>
+              </div>
+            ))}
+          </div>
+          <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+            <p className="text-xs text-slate-600 leading-relaxed">
+              <strong>Ventajas:</strong> Servicios reutilizables en múltiples contextos (Node, CLI, etc). Hooks independientes, fáciles de testear. AppContext limpio (250 líneas vs 1418 antes). Alineado con 4 épicas del Jira: cada servicio/hook es responsable de una épica.
+            </p>
+          </div>
         </div>
       </div>
 
@@ -725,30 +776,52 @@ function TabStack() {
         <div className="font-mono text-xs bg-slate-900 text-slate-200 rounded-xl p-5 overflow-x-auto">
           <pre>{`/
 ├── src/
+│   ├── services/                     # Capa RPC (sin React)
+│   │   ├── authService.ts            # HU 1.1: Auth
+│   │   ├── usuariosService.ts        # HU 1.0: Usuarios + Personal
+│   │   ├── clientesService.ts        # HU 1.2: Clientes + Vehículos
+│   │   ├── citasService.ts           # HU 1.3, 1.5: Citas
+│   │   ├── ordenesService.ts         # HU 2.1-2.7: Órdenes + QC + Notas
+│   │   ├── inventarioService.ts      # HU 3.1-3.3: Repuestos + Stock
+│   │   ├── pagosService.ts           # HU 4.1-4.2: Pagos + Facturas
+│   │   ├── reportesService.ts        # HU 4.3: Reportes
+│   │   └── transversalService.ts     # Notificaciones + Auditoría + Catálogos
+│   │
+│   ├── hooks/                        # Custom Hooks (con useState)
+│   │   ├── useAuth.ts                # Session, login, register
+│   │   ├── useUsuarios.ts            # CRUD usuarios + personal
+│   │   ├── useClientes.ts            # CRUD clientes + vehículos
+│   │   ├── useCitas.ts               # CRUD + cambios estado citas
+│   │   ├── useOrdenes.ts             # CRUD + flujo completo OTs
+│   │   ├── useInventario.ts          # Repuestos, stock, proveedores
+│   │   ├── usePagos.ts               # Pagos, facturas, invoices
+│   │   ├── useReportes.ts            # Generación de reportes
+│   │   └── useTransversal.ts         # useNotificaciones, useAuditoria, useCatalogs
+│   │
 │   ├── app/
 │   │   ├── App.tsx                   # Entry point + RouterProvider
 │   │   ├── routes.ts                 # Definición de rutas
 │   │   ├── context/
-│   │   │   └── AppContext.tsx        # Estado global (19 entidades)
+│   │   │   └── AppContext.tsx        # Orquestador de hooks (250 líneas)
 │   │   ├── components/
 │   │   │   ├── Layout.tsx            # Shell + navegación lateral
 │   │   │   └── ui/                   # shadcn/ui components
 │   │   ├── pages/
 │   │   │   ├── Login.tsx
 │   │   │   ├── Dashboard.tsx         # Dashboard multi-rol
-│   │   │   ├── Appointments.tsx      # Citas
-│   │   │   ├── Clients.tsx           # Clientes
-│   │   │   ├── Vehicles.tsx          # Vehículos
-│   │   │   ├── WorkOrders.tsx        # Órdenes de Trabajo
-│   │   │   ├── Diagnostico.tsx       # Panel Mecánico
-│   │   │   ├── Inventory.tsx         # Inventario + Proveedores
-│   │   │   ├── ClientPortal.tsx      # Portal del Cliente
-│   │   │   ├── Facturas.tsx          # Facturas + PDF
-│   │   │   ├── Reportes.tsx          # Reportes gerenciales
-│   │   │   ├── ConfigSecurity.tsx    # Configuración + Users
-│   │   │   ├── SystemDocs.tsx        # Documentación del sistema
-│   │   │   ├── JiraPlanning.tsx      # Planificación épicas
-│   │   │   ├── UserStoryBoard.tsx    # Kanban user stories
+│   │   │   ├── Citas.tsx
+│   │   │   ├── Clientes.tsx
+│   │   │   ├── Vehiculos.tsx
+│   │   │   ├── Ordenes.tsx
+│   │   │   ├── Diagnostico.tsx
+│   │   │   ├── Inventario.tsx
+│   │   │   ├── ClientPortal.tsx
+│   │   │   ├── Facturas.tsx
+│   │   │   ├── Reportes.tsx
+│   │   │   ├── ConfigSecurity.tsx
+│   │   │   ├── SystemDocs.tsx
+│   │   │   ├── JiraPlanning.tsx
+│   │   │   ├── UserStoryBoard.tsx
 │   │   │   └── ArquitecturaDocs.tsx  # 👈 Esta página
 │   │   └── data/
 │   │       └── planningData.ts
@@ -941,12 +1014,143 @@ function TabFlujo() {
   );
 }
 
+// ─── Tab: Arquitectura Frontend ───────────────────────────────────────────────
+function TabFrontendArquitectura() {
+  return (
+    <div className="space-y-6">
+      {/* Diagrama del flujo */}
+      <div className="bg-white rounded-xl border border-slate-200 p-6">
+        <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <GitBranch size={18} className="text-purple-600" />
+          Flujo de Datos: Component → Hook → Service → RPC → DB
+        </h3>
+        <div className="bg-slate-50 rounded-lg p-6 overflow-x-auto">
+          <div className="flex items-center gap-2 font-mono text-xs whitespace-nowrap">
+            <div className="bg-blue-100 border border-blue-300 rounded px-3 py-2 text-blue-700 font-bold">Component</div>
+            <ArrowRight size={16} className="text-slate-400" />
+            <div className="bg-purple-100 border border-purple-300 rounded px-3 py-2 text-purple-700 font-bold">Hook (useState)</div>
+            <ArrowRight size={16} className="text-slate-400" />
+            <div className="bg-emerald-100 border border-emerald-300 rounded px-3 py-2 text-emerald-700 font-bold">Service</div>
+            <ArrowRight size={16} className="text-slate-400" />
+            <div className="bg-cyan-100 border border-cyan-300 rounded px-3 py-2 text-cyan-700 font-bold">supabase.rpc()</div>
+            <ArrowRight size={16} className="text-slate-400" />
+            <div className="bg-indigo-100 border border-indigo-300 rounded px-3 py-2 text-indigo-700 font-bold">PostgreSQL</div>
+          </div>
+        </div>
+      </div>
+
+      {/* 9 Servicios alineados a épicas */}
+      <div className="bg-white rounded-xl border border-slate-200 p-6">
+        <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <Layers size={18} className="text-cyan-600" />
+          9 Servicios Alineados a 4 Épicas del Jira
+        </h3>
+        <div className="space-y-3">
+          {[
+            { epica: 'Épica 1: Citas e Historial', servicios: ['authService', 'usuariosService', 'clientesService', 'citasService'], color: 'bg-blue-50 border-blue-200' },
+            { epica: 'Épica 2: Órdenes de Trabajo', servicios: ['ordenesService'], color: 'bg-indigo-50 border-indigo-200' },
+            { epica: 'Épica 3: Inventario', servicios: ['inventarioService'], color: 'bg-amber-50 border-amber-200' },
+            { epica: 'Épica 4: Pagos y Reportes', servicios: ['pagosService', 'reportesService'], color: 'bg-emerald-50 border-emerald-200' },
+            { epica: 'Transversal', servicios: ['transversalService (notificaciones, auditoría, catálogos)'], color: 'bg-slate-50 border-slate-200' },
+          ].map(e => (
+            <div key={e.epica} className={`rounded-lg border p-4 ${e.color}`}>
+              <p className="font-semibold text-slate-800 text-sm mb-2">{e.epica}</p>
+              <div className="flex flex-wrap gap-2">
+                {e.servicios.map(s => (
+                  <span key={s} className="text-xs bg-white px-2.5 py-1 rounded-full border border-slate-200 font-mono text-slate-700">
+                    {s}.ts
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 9 Custom Hooks */}
+      <div className="bg-white rounded-xl border border-slate-200 p-6">
+        <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <GitBranch size={18} className="text-purple-600" />
+          9 Custom Hooks (uno por servicio)
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {[
+            { hook: 'useAuth', desc: 'login, logout, registerCliente, currentUser', state: 'currentUser' },
+            { hook: 'useUsuarios', desc: 'CRUD usuarios + personal', state: 'usuarios, personal' },
+            { hook: 'useClientes', desc: 'CRUD clientes + vehículos', state: 'clientes, vehiculos' },
+            { hook: 'useCitas', desc: 'CRUD + cambios de estado', state: 'citas' },
+            { hook: 'useOrdenes', desc: 'CRUD + notas + QC + pagos', state: 'ordenes, notasOT, qcOT, pagosOT' },
+            { hook: 'useInventario', desc: 'CRUD repuestos, stock, proveedores', state: 'repuestos, kardex, proveedores' },
+            { hook: 'usePagos', desc: 'Pagos, facturas, invoices', state: 'facturas, pagosOT, facturasOT' },
+            { hook: 'useReportes', desc: 'Generación de reportes', state: '(sin estado)' },
+            { hook: 'useTransversal', desc: 'Notificaciones, auditoría, catálogos', state: 'notificaciones, auditoria, catalogs' },
+          ].map(h => (
+            <div key={h.hook} className="bg-slate-50 rounded-lg border border-slate-200 p-3.5">
+              <p className="font-semibold text-slate-800 text-sm mb-1.5 font-mono">{h.hook}</p>
+              <p className="text-xs text-slate-600 mb-2">{h.desc}</p>
+              <p className="text-xs bg-white px-2 py-1 rounded border border-slate-200 font-mono text-slate-700">
+                State: {h.state}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Ejemplo: agregar nueva funcionalidad */}
+      <div className="bg-white rounded-xl border border-slate-200 p-6">
+        <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <Code2 size={18} className="text-cyan-600" />
+          Ejemplo: Agregar Nueva Funcionalidad
+        </h3>
+        <p className="text-sm text-slate-600 mb-4">Supongamos que necesitas agregar una función para "cancelar orden":</p>
+        <div className="space-y-3">
+          {[
+            { paso: 1, titulo: 'Crear RPC en database-setup.sql', desc: 'CREATE FUNCTION cancelar_orden(p_orden_id uuid) ...' },
+            { paso: 2, titulo: 'Agregar en service', desc: 'En ordenesService.ts: cancelar: (id) => supabase.rpc(\'cancelar_orden\', ...)' },
+            { paso: 3, titulo: 'Agregar en hook', desc: 'En useOrdenes.ts: const cancelOrder = async (id) => { ... setOrdenes(...) }' },
+            { paso: 4, titulo: 'AppContext automático', desc: 'Ya está expuesto vía ordenes.cancelOrder en useApp()' },
+            { paso: 5, titulo: 'Usar en componente', desc: 'const { ordenes, cancelOrder } = useOrdenes(); await cancelOrder(id);' },
+          ].map(p => (
+            <div key={p.paso} className="flex gap-4 items-start">
+              <div className="w-7 h-7 rounded-full bg-purple-600 text-white flex items-center justify-center text-xs font-bold flex-shrink-0">
+                {p.paso}
+              </div>
+              <div className="flex-1 pt-0.5">
+                <p className="font-semibold text-slate-800 text-sm">{p.titulo}</p>
+                <p className="text-xs text-slate-500 mt-0.5 font-mono bg-slate-50 px-2 py-1 rounded mt-1">{p.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Beneficios */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {[
+          { titulo: '✅ Reutilizable', desc: 'Services no tienen React, se pueden usar en Node, CLI, etc.' },
+          { titulo: '✅ Testeable', desc: 'Hooks y services son funciones puras sin React acoplado.' },
+          { titulo: '✅ Escalable', desc: 'Agregar épica = nuevo servicio + hook. Sin modificar AppContext.' },
+          { titulo: '✅ Mantenible', desc: 'Código organizado por dominio. Cambios en OTs no afectan Inventario.' },
+          { titulo: '✅ Coherente', desc: 'Alineado con 4 épicas del Jira. Fácil navegar por features.' },
+          { titulo: '✅ Performance', desc: 'Cada hook carga solo su estado. Sin sobre-rendering.' },
+        ].map(b => (
+          <div key={b.titulo} className="bg-emerald-50 rounded-lg border border-emerald-200 p-4">
+            <p className="font-semibold text-emerald-900 text-sm mb-1">{b.titulo}</p>
+            <p className="text-xs text-emerald-700">{b.desc}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function ArquitecturaDocs() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'overview',  label: 'Overview',         icon: <Layers size={15} />       },
+    { id: 'frontend',  label: 'Frontend Arch',    icon: <Zap size={15} />          },
     { id: 'screens',   label: 'Pantallas',         icon: <Monitor size={15} />      },
     { id: 'roles',     label: 'Roles & Acceso',    icon: <Users size={15} />        },
     { id: 'stack',     label: 'Stack Técnico',     icon: <Code2 size={15} />        },
@@ -999,6 +1203,7 @@ export default function ArquitecturaDocs() {
       {/* Content */}
       <div className="max-w-7xl mx-auto px-6 py-6">
         {activeTab === 'overview'  && <TabOverview />}
+        {activeTab === 'frontend'  && <TabFrontendArquitectura />}
         {activeTab === 'screens'   && <TabScreens />}
         {activeTab === 'roles'     && <TabRoles />}
         {activeTab === 'stack'     && <TabStack />}

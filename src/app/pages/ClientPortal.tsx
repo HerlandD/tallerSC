@@ -5,7 +5,7 @@ import {
   Receipt, Calendar, AlertTriangle, ThumbsUp, Info, Plus,
   History, Star, Package, CreditCard as PayIcon,
   Smartphone, Banknote, X, CheckSquare, ArrowRight, User, Shield,
-  Fuel, Settings, Droplet, ChevronDown, ChevronUp, Printer
+  Fuel, Settings, Droplet, ChevronDown, ChevronUp, Printer, Download
 } from 'lucide-react';
 import { useApp, OrdenTrabajo, EstadoOrden, Vehiculo } from '../context/AppContext';
 import DocumentoPDF from '../components/DocumentoPDF';
@@ -547,7 +547,8 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
 export default function ClientPortal() {
   const {
     ordenes, clientes, vehiculos, currentUser, notificaciones, marcarNotificacionLeida,
-    citas, updateOrden, addFactura, addNotificacion, rechazarCotizacion, aprobarCotizacion
+    citas, updateOrden, addFactura, addNotificacion, rechazarCotizacion, aprobarCotizacion,
+    obtenerFacturaPorOrden, generarHtmlFactura, guardarUrlPdfFactura, facturasOT, cargarFacturasOT
   } = useApp();
 
   const [historialVehiculo, setHistorialVehiculo] = useState<Vehiculo | null>(null);
@@ -555,6 +556,7 @@ export default function ClientPortal() {
   const [showHistorial, setShowHistorial] = useState<Vehiculo | null>(null);
   const [showDocs, setShowDocs] = useState<{ tipo: 'cotizacion' | 'factura' | 'recepcion', orden: OrdenTrabajo } | null>(null);
   const [showAgendarModal, setShowAgendarModal] = useState(false);
+  const [descargandoPdf, setDescargandoPdf] = useState<string | null>(null);
 
   const clienteActual = clientes.find(c => c.usuarioId === currentUser?.id || c.nombre === currentUser?.nombre);
   const misVehiculos = clienteActual ? vehiculos.filter(v => v.clienteId === clienteActual.id) : [];
@@ -595,6 +597,42 @@ export default function ClientPortal() {
     });
     toast.success(`✅ Pago confirmado. Factura ${factura.numero}. Presenta el código "${orden.numero}" al recoger tu vehículo.`);
     setPagoOrden(null);
+  };
+
+  const handleDescargarFactura = async (ordenId: string, numeroFactura: string) => {
+    setDescargandoPdf(ordenId);
+    try {
+      const factura = await obtenerFacturaPorOrden(ordenId);
+      if (!factura.id) {
+        toast.error('No se encontró factura para esta orden');
+        setDescargandoPdf(null);
+        return;
+      }
+
+      if (factura.urlPdf) {
+        window.open(factura.urlPdf, '_blank');
+      } else {
+        const htmlRes = await generarHtmlFactura(factura.id);
+        if (htmlRes.ok && htmlRes.html) {
+          const element = document.createElement('a');
+          element.setAttribute('href', 'data:text/html;charset=utf-8,' + encodeURIComponent(htmlRes.html));
+          element.setAttribute('download', `${numeroFactura}.html`);
+          element.style.display = 'none';
+          document.body.appendChild(element);
+          element.click();
+          document.body.removeChild(element);
+
+          const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(htmlRes.html);
+          await guardarUrlPdfFactura(factura.id, dataUrl);
+          toast.success('Factura descargada');
+        } else {
+          toast.error('Error al generar factura');
+        }
+      }
+    } catch (error) {
+      toast.error('Error al descargar factura');
+    }
+    setDescargandoPdf(null);
   };
 
   return (
@@ -650,12 +688,11 @@ export default function ClientPortal() {
       {/* ── Quick Actions Bar ── */}
       <div className="bg-white border-b border-slate-200 shadow-sm">
         <div className="max-w-3xl mx-auto px-4 py-3">
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {[
               { icon: <Calendar size={19}/>, label: 'Agendar cita', color: 'bg-slate-800 text-white', action: () => setShowAgendarModal(true) },
               { icon: <ClipboardList size={19}/>, label: 'Mis servicios', color: 'bg-cyan-50 text-cyan-700 border border-cyan-200', action: () => document.getElementById('sec-servicios')?.scrollIntoView({behavior:'smooth'}) },
               { icon: <Car size={19}/>, label: 'Mis vehículos', color: 'bg-slate-50 text-slate-700 border border-slate-200', action: () => document.getElementById('sec-vehiculos')?.scrollIntoView({behavior:'smooth'}) },
-              { icon: <Receipt size={19}/>, label: 'Mis facturas', color: 'bg-emerald-50 text-emerald-700 border border-emerald-200', action: () => document.getElementById('sec-citas')?.scrollIntoView({behavior:'smooth'}) },
             ].map(a => (
               <button key={a.label} onClick={a.action}
                 className={`${a.color} rounded-xl py-3 px-2 flex flex-col items-center gap-1.5 text-xs font-semibold hover:opacity-80 transition-all`}>
@@ -952,35 +989,6 @@ export default function ClientPortal() {
           )}
         </section>
 
-        {/* ═══ NOTIFICACIONES ═══ */}
-        {misNotifs.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-7 h-7 bg-red-500 rounded-lg flex items-center justify-center">
-                <Bell size={14} className="text-white"/>
-              </div>
-              <h2 className="font-bold text-slate-800">Notificaciones</h2>
-              {unreadCount > 0 && (
-                <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full font-bold">{unreadCount} nueva{unreadCount > 1 ? 's' : ''}</span>
-              )}
-            </div>
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden divide-y divide-slate-100">
-              {misNotifs.map(n => (
-                <div key={n.id} onClick={() => marcarNotificacionLeida(n.id)}
-                  className={`px-5 py-3.5 cursor-pointer transition-colors ${!n.leida ? 'bg-cyan-50/50 hover:bg-cyan-50' : 'hover:bg-slate-50'}`}>
-                  <div className="flex items-start gap-2.5">
-                    {!n.leida && <div className="w-2 h-2 bg-cyan-500 rounded-full flex-shrink-0 mt-1.5"/>}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-slate-800">{n.titulo}</p>
-                      <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{n.mensaje}</p>
-                      <p className="text-xs text-slate-300 mt-1">{new Date(n.fecha).toLocaleString('es-ES',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
 
         {/* ═══ MI PERFIL ═══ */}
         {clienteActual && (
