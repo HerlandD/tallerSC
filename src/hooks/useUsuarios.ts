@@ -70,8 +70,7 @@ export function useUsuarios(autoLoad = true) {
     try {
       const prev = usuarios.find(x => x.id === id);
       if (!prev) return { ok: false, error: 'Usuario no encontrado' };
-      const merged = { ...prev, ...u };
-      const { data, error } = await usuariosService.actualizar(id, merged);
+      const { data, error } = await usuariosService.actualizar(id, u);
       if (error) throw error;
       if (!data?.success) return { ok: false, error: data?.error ?? 'Error al actualizar' };
       setUsuarios(prev => prev.map(x => x.id === id ? { ...x, ...u } : x));
@@ -99,10 +98,7 @@ export function useUsuarios(autoLoad = true) {
 
   const updatePersonal = async (id: string, p: Partial<PersonalTaller>): Promise<void> => {
     try {
-      const prev = personal.find(x => x.id === id);
-      if (!prev) return;
-      const merged = { ...prev, ...p };
-      const { data, error } = await usuariosService.actualizarPersonal(id, merged);
+      const { data, error } = await usuariosService.actualizarPersonal(id, p);
       if (error) throw error;
       if (data?.ok) {
         setPersonal(prev => prev.map(x => x.id === id ? { ...x, ...p } : x));

@@ -44,6 +44,15 @@ export const inventarioService = {
       p_observaciones: ordenId ? `Salida por ${ordenId}` : 'Salida manual',
     }),
 
+  registrarSalidaV3: (repuestoId: string, cantidad: number, ordenId: string, usuarioId: string, usuarioNombre: string) =>
+    supabase.rpc('registrar_salida_repuesto_v3', {
+      p_repuesto_id: repuestoId,
+      p_cantidad: cantidad,
+      p_orden_id: ordenId,
+      p_usuario_id: usuarioId,
+      p_usuario_nombre: usuarioNombre,
+    }),
+
   registrarReserva: (repuestoId: string, repuestoNombre: string, cantidad: number, ordenId: string, usuarioId?: string, usuarioNombre?: string) =>
     supabase.rpc('registrar_movimiento_kardex', {
       p_repuesto_id: repuestoId,

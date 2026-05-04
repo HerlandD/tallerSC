@@ -3,6 +3,9 @@
 -- Ejecutar en Supabase SQL Editor (orden secuencial)
 -- =========================================================
 
+-- ─── EXTENSIÓN HTTP ─────────────────────────────────────
+CREATE EXTENSION IF NOT EXISTS http;
+
 -- ─── 0. HASH DE CONTRASEÑAS ─────────────────────────────
 -- Se usa SHA-256 nativo (encode + sha256 + pepper), disponible en
 -- PostgreSQL 14+ sin ninguna extensión.
@@ -122,7 +125,8 @@ BEGIN
       'email',     v_user.email,
       'telefono',  v_user.telefono,
       'ci',        v_user.ci,
-      'activo',    v_user.activo
+      'activo',    v_user.activo,
+      'direccion', v_user.direccion
     )
   );
 END;
@@ -195,7 +199,8 @@ BEGIN
       'email',     v_nuevo.email,
       'telefono',  v_nuevo.telefono,
       'ci',        v_nuevo.ci,
-      'activo',    v_nuevo.activo
+      'activo',    v_nuevo.activo,
+      'direccion', v_nuevo.direccion
     )
   );
 EXCEPTION
@@ -1358,6 +1363,7 @@ BEGIN
         'telefono',       telefono,
         'ci',             ci,
         'activo',         activo,
+        'direccion',      direccion,
         'password',       password,
         'fechaCreacion',  created_at
       ) ORDER BY created_at ASC
@@ -1488,6 +1494,14 @@ BEGIN
     activo    = COALESCE(p_activo,    activo),
     direccion = COALESCE(p_direccion, direccion)
   WHERE id = p_id;
+
+  -- Sincronizar con la tabla clientes si existe un registro vinculado
+  UPDATE clientes SET
+    direccion = COALESCE(p_direccion, direccion),
+    telefono  = COALESCE(p_telefono,  telefono),
+    email     = COALESCE(lower(p_email), email),
+    ci        = COALESCE(p_ci,        ci)
+  WHERE usuario_id = p_id AND deleted_at IS NULL;
 
   RETURN json_build_object('success', TRUE);
 EXCEPTION
@@ -2164,6 +2178,49 @@ CREATE TRIGGER tr_auto_crear_cliente
 AFTER INSERT ON usuarios
 FOR EACH ROW
 EXECUTE FUNCTION fn_auto_crear_cliente();
+
+-- ─── 32b. SINCRONIZACIÓN BIDIRECCIONAL DE DATOS (DIRECCIÓN, TELÉFONO, EMAIL, CI) ──
+CREATE OR REPLACE FUNCTION fn_sync_usuario_cliente_data()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_TABLE_NAME = 'usuarios' THEN
+    UPDATE clientes SET
+      direccion = NEW.direccion,
+      telefono  = COALESCE(NEW.telefono, telefono),
+      email     = COALESCE(NEW.email, email),
+      ci        = COALESCE(NEW.ci, ci)
+    WHERE usuario_id = NEW.id 
+      AND (direccion IS DISTINCT FROM NEW.direccion 
+           OR telefono IS DISTINCT FROM NEW.telefono 
+           OR email IS DISTINCT FROM NEW.email 
+           OR ci IS DISTINCT FROM NEW.ci);
+  ELSIF TG_TABLE_NAME = 'clientes' THEN
+    IF NEW.usuario_id IS NOT NULL THEN
+      UPDATE usuarios SET
+        direccion = NEW.direccion,
+        telefono  = COALESCE(NEW.telefono, telefono),
+        email     = COALESCE(NEW.email, email),
+        ci        = COALESCE(NEW.ci, ci)
+      WHERE id = NEW.usuario_id
+        AND (direccion IS DISTINCT FROM NEW.direccion 
+             OR telefono IS DISTINCT FROM NEW.telefono 
+             OR email IS DISTINCT FROM NEW.email 
+             OR ci IS DISTINCT FROM NEW.ci);
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_sync_usuario_data ON usuarios;
+CREATE TRIGGER trg_sync_usuario_data
+AFTER UPDATE ON usuarios
+FOR EACH ROW EXECUTE FUNCTION fn_sync_usuario_cliente_data();
+
+DROP TRIGGER IF EXISTS trg_sync_cliente_data ON clientes;
+CREATE TRIGGER trg_sync_cliente_data
+AFTER UPDATE ON clientes
+FOR EACH ROW EXECUTE FUNCTION fn_sync_usuario_cliente_data();
 
 -- =========================================================
 -- HU-2.4: Notas y adjuntos de progreso en OT
@@ -3436,3 +3493,50 @@ BEGIN
 END;
 $$;
 GRANT EXECUTE ON FUNCTION asignar_mecanico_orden(UUID, UUID) TO anon, authenticated;
+
+-- ─── RPC: enviar_factura_email ──────────────────────────
+CREATE OR REPLACE FUNCTION enviar_factura_email(
+  p_cliente_email VARCHAR,
+  p_cliente_nombre VARCHAR,
+  p_factura_numero VARCHAR,
+  p_total NUMERIC,
+  p_subtotal NUMERIC,
+  p_impuesto NUMERIC,
+  p_metodo_pago VARCHAR,
+  p_fecha VARCHAR
+)
+RETURNS JSON
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_response TEXT;
+  v_status INT;
+BEGIN
+  -- Llamar a la Edge Function desde el servidor con autenticación
+  SELECT status, content INTO v_status, v_response
+  FROM http_post(
+    'https://uikpczaqoaxhwjybfvxw.supabase.co/functions/v1/server/send-factura-email',
+    jsonb_build_object(
+      'clienteEmail', p_cliente_email,
+      'clienteNombre', p_cliente_nombre,
+      'facturaNumero', p_factura_numero,
+      'total', p_total,
+      'subtotal', p_subtotal,
+      'impuesto', p_impuesto,
+      'metodoPago', p_metodo_pago,
+      'fecha', p_fecha
+    )::TEXT,
+    'application/json',
+    ARRAY['Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVpa3BjemFxb2F4aHdqeWJmdnh3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjE3Nzg5OCwiZXhwIjoyMDkxNzUzODk4fQ.hRjpQpOhHc4XlfZhPH5bSbhC6KSyps0lsxWStB9jG-4']::TEXT[]
+  );
+
+  IF v_status = 200 THEN
+    RETURN json_build_object('ok', TRUE);
+  ELSE
+    RETURN json_build_object('ok', FALSE, 'error', 'Error al enviar email: ' || v_response);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RETURN json_build_object('ok', FALSE, 'error', 'Error: ' || SQLERRM);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION enviar_factura_email(VARCHAR, VARCHAR, VARCHAR, NUMERIC, NUMERIC, NUMERIC, VARCHAR, VARCHAR) TO anon, authenticated;

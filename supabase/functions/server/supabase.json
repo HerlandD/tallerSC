@@ -1,0 +1,13 @@
+{
+  "functions": [
+    {
+      "slug": "server",
+      "importMapPath": "import_map.json",
+      "definition": {
+        "memory": 256,
+        "timeout": 60,
+        "runtime": "deno"
+      }
+    }
+  ]
+}

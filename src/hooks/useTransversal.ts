@@ -46,17 +46,28 @@ export function useNotificaciones(autoLoad = true) {
   };
 }
 
-export function useAuditoria() {
+export function useAuditoria(autoLoad = true) {
   const [auditoria, setAuditoria] = useState<LogAuditoria[]>([]);
+
+  useEffect(() => {
+    if (autoLoad) cargarAuditoria();
+  }, [autoLoad]);
+
+  const cargarAuditoria = async () => {
+    const { data } = await auditoriaService.listar();
+    if (Array.isArray(data)) setAuditoria(data as LogAuditoria[]);
+  };
 
   const addAuditoria = async (log: Omit<LogAuditoria, 'id'>) => {
     await auditoriaService.insertar(log);
-    setAuditoria(prev => [...prev, { ...log, id: `a${Date.now()}` }]);
+    // Recargar para tener el ID real de la base de datos
+    cargarAuditoria();
   };
 
   return {
     auditoria,
     addAuditoria,
+    cargarAuditoria,
   };
 }
 

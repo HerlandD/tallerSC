@@ -7,7 +7,7 @@ import {
   Smartphone, Banknote, X, CheckSquare, ArrowRight, User, Shield,
   Fuel, Settings, Droplet, ChevronDown, ChevronUp, Printer, Download
 } from 'lucide-react';
-import { useApp, OrdenTrabajo, EstadoOrden, Vehiculo } from '../context/AppContext';
+import { useApp, OrdenTrabajo, EstadoOrden, Vehiculo, LineaCotizacion } from '../context/AppContext';
 import DocumentoPDF from '../components/DocumentoPDF';
 import { ESTADO_CONFIG } from './Dashboard';
 import { useNavigate } from 'react-router';
@@ -99,8 +99,8 @@ function ModalPago({ orden, total, onClose, onPagar }: {
 }
 
 // ─── Vehicle History Modal ─────────────────────────────────────────────────────
-function ModalHistorialVehiculo({ vehiculo, ordenes, onClose }: {
-  vehiculo: Vehiculo; ordenes: OrdenTrabajo[]; onClose: () => void;
+function ModalHistorialVehiculo({ vehiculo, ordenes, cliente, onClose }: {
+  vehiculo: Vehiculo; ordenes: OrdenTrabajo[]; cliente?: Cliente; onClose: () => void;
 }) {
   const historial = ordenes.filter(o => o.vehiculoId === vehiculo.id)
     .sort((a, b) => b.fechaCreacion.localeCompare(a.fechaCreacion));
@@ -108,7 +108,7 @@ function ModalHistorialVehiculo({ vehiculo, ordenes, onClose }: {
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden">
-        <div className="bg-slate-800 px-6 py-4 flex items-center justify-between flex-shrink-0">
+        <div className="bg-slate-800 px-6 py-4 flex items-center justify-between flex-shrink-0 no-print">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">
               <Car size={18} className="text-white"/>
@@ -135,14 +135,13 @@ function ModalHistorialVehiculo({ vehiculo, ordenes, onClose }: {
         </div>
         <div className="flex-1 overflow-y-auto">
           {/* DocumentArea for Printing hidden in normal view but visible in print */}
-          <div className="hidden">
-            <div id="print-area">
-              <DocumentoPDF 
-                tipo="historial" 
-                vehiculo={vehiculo} 
-                ordenes={ordenes} 
-              />
-            </div>
+          <div className="print-only">
+            <DocumentoPDF 
+              tipo="historial" 
+              vehiculo={vehiculo} 
+              ordenes={ordenes} 
+              cliente={cliente}
+            />
           </div>
           {historial.length === 0 ? (
             <div className="py-12 text-center text-slate-400">
@@ -153,7 +152,7 @@ function ModalHistorialVehiculo({ vehiculo, ordenes, onClose }: {
             <div className="divide-y divide-slate-100">
               {historial.map(o => {
                 const cfg = ESTADO_CONFIG[o.estado];
-                const total = (o.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0);
+                const total = (o.cotizacion?.lineas || []).reduce((s: number, l: LineaCotizacion) => s + l.cantidad * l.precioUnitario, 0);
                 return (
                   <div key={o.id} className="px-5 py-4">
                     <div className="flex items-start justify-between gap-3 mb-2">
@@ -304,7 +303,7 @@ function ModalConfirmarCotizacion({ orden, accion, onConfirm, onCancel }: {
   orden: OrdenTrabajo; accion: 'aprobar' | 'rechazar';
   onConfirm: () => void; onCancel: () => void;
 }) {
-  const total = (orden.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0);
+  const total = (orden.cotizacion?.lineas || []).reduce((s: number, l: LineaCotizacion) => s + l.cantidad * l.precioUnitario, 0);
   const costoDx = orden.cotizacion?.costoDiagnostico || 0;
 
   return (
@@ -357,7 +356,7 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
   const [confirmCotizacion, setConfirmCotizacion] = useState<'aprobar' | 'rechazar' | null>(null);
   const cfg = ESTADO_CONFIG[orden.estado];
   const stepIdx = getStepIndex(orden.estado);
-  const total = (orden.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0);
+  const total = (orden.cotizacion?.lineas || []).reduce((s: number, l: LineaCotizacion) => s + l.cantidad * l.precioUnitario, 0);
   const costoDx = orden.cotizacion?.costoDiagnostico || 0;
   const isLista = orden.estado === 'liberada';
   const isPendAprobacion = orden.estado === 'esperando_aprobacion';
@@ -490,7 +489,7 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
         {showDocs && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
             <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[95vh] flex flex-col overflow-hidden">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-slate-50/50">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-slate-50/50 no-print">
                 <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><Printer size={16}/> Comprobante TallerPro</p>
                 <div className="flex gap-2">
                   <button onClick={() => window.print()} className="px-4 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800">Imprimir / PDF</button>
@@ -531,7 +530,7 @@ function ServicioCard({ orden, vehiculo, onPagar }: {
               aprobarCotizacion(orden.id);
               toast.success('¡Cotización aprobada! El taller iniciará la reparación.');
             } else {
-              rechazarCotizacion(orden.id, costoDx);
+              rechazarCotizacion(orden.id, orden.clienteId, costoDx);
               toast.info('Cotización rechazada. Se ha generado un cobro por diagnóstico.');
             }
             setConfirmCotizacion(null);
@@ -574,7 +573,7 @@ export default function ClientPortal() {
   const finalizadas = misOrdenes.filter(o => o.estado === 'finalizada');
 
   const handlePagar = (orden: OrdenTrabajo, metodoPago: string) => {
-    const total = (orden.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0);
+    const total = (orden.cotizacion?.lineas || []).reduce((s: number, l: LineaCotizacion) => s + l.cantidad * l.precioUnitario, 0);
     const factura = {
       numero: `FAC-${Date.now()}`,
       fecha: new Date().toISOString().split('T')[0],
@@ -708,7 +707,7 @@ export default function ClientPortal() {
       <div className="max-w-3xl mx-auto px-4 pt-4 space-y-3">
         {listasEntrega.map(o => {
           const veh = misVehiculos.find(v => v.id === o.vehiculoId);
-          const total = (o.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0);
+          const total = (o.cotizacion?.lineas || []).reduce((s: number, l: LineaCotizacion) => s + l.cantidad * l.precioUnitario, 0);
           return (
             <div key={o.id} className="bg-gradient-to-r from-emerald-700 to-emerald-600 rounded-2xl p-5 shadow-lg shadow-emerald-200">
               <div className="flex items-start gap-4">
@@ -736,7 +735,7 @@ export default function ClientPortal() {
         })}
         {pendAprobacion.map(o => {
           const veh = misVehiculos.find(v => v.id === o.vehiculoId);
-          const total = (o.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0);
+          const total = (o.cotizacion?.lineas || []).reduce((s: number, l: LineaCotizacion) => s + l.cantidad * l.precioUnitario, 0);
           return (
             <div key={o.id} className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4">
               <div className="flex items-start gap-3">
@@ -748,7 +747,7 @@ export default function ClientPortal() {
                     <button 
                       onClick={() => {
                         const m = prompt('Motivo del rechazo (opcional):');
-                        rechazarCotizacion(o.id, m || undefined);
+                        rechazarCotizacion(o.id, o.clienteId, o.cotizacion?.costoDiagnostico);
                         toast.info('Cotización rechazada.');
                       }}
                       className="px-3 py-1 bg-white text-red-600 border border-red-200 rounded-lg text-[10px] font-bold"
@@ -817,8 +816,8 @@ export default function ClientPortal() {
                           <span className="font-bold text-slate-800 text-base font-mono">{v.placa}</span>
                           <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">{v.color}</span>
                           {activa && (
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${ESTADO_CONFIG[activa.estado].bg} ${ESTADO_CONFIG[activa.estado].color}`}>
-                              {ESTADO_CONFIG[activa.estado].label}
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${ESTADO_CONFIG[activa.estado as EstadoOrden].bg} ${ESTADO_CONFIG[activa.estado as EstadoOrden].color}`}>
+                              {ESTADO_CONFIG[activa.estado as EstadoOrden].label}
                             </span>
                           )}
                         </div>
@@ -903,8 +902,8 @@ export default function ClientPortal() {
             <div className="space-y-4">
               {/* Activas primero */}
               {[...misOrdenes].sort((a,b) => {
-                const prioridad = { 'liberada':0,'esperando_aprobacion':1,'control_calidad':2,'en_reparacion':3,'en_diagnostico':4,'registrada':5,'liquidacion_diagnostico':6,'finalizada':7,'cancelada':8 };
-                return (prioridad[a.estado]??9) - (prioridad[b.estado]??9);
+                const prioridad: Record<string, number> = { 'liberada':0,'esperando_aprobacion':1,'control_calidad':2,'en_reparacion':3,'en_diagnostico':4,'registrada':5,'liquidacion_diagnostico':6,'finalizada':7,'cancelada':8 };
+                return (prioridad[a.estado as string]??9) - (prioridad[b.estado as string]??9);
               }).map(o => (
                 <ServicioCard
                   key={o.id}
@@ -1002,7 +1001,7 @@ export default function ClientPortal() {
             <div className="bg-white border border-slate-200 rounded-2xl px-5 py-4">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 bg-slate-800 rounded-xl flex items-center justify-center">
-                  <span className="text-white font-bold">{clienteActual.nombre.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()}</span>
+                  <span className="text-white font-bold">{clienteActual.nombre.split(' ').map((n: string)=>n[0]).join('').slice(0,2).toUpperCase()}</span>
                 </div>
                 <div>
                   <h3 className="font-bold text-slate-800">{clienteActual.nombre}</h3>
@@ -1034,12 +1033,17 @@ export default function ClientPortal() {
 
       {/* ── Modals ── */}
       {historialVehiculo && (
-        <ModalHistorialVehiculo vehiculo={historialVehiculo} ordenes={misOrdenes} onClose={() => setHistorialVehiculo(null)}/>
+        <ModalHistorialVehiculo 
+          vehiculo={historialVehiculo} 
+          ordenes={misOrdenes} 
+          cliente={clienteActual}
+          onClose={() => setHistorialVehiculo(null)}
+        />
       )}
       {pagoOrden && (
         <ModalPago
           orden={pagoOrden}
-          total={(pagoOrden.cotizacion?.lineas || []).reduce((s,l) => s + l.cantidad * l.precioUnitario, 0)}
+          total={(pagoOrden.cotizacion?.lineas || []).reduce((s: number, l: LineaCotizacion) => s + l.cantidad * l.precioUnitario, 0)}
           onClose={() => setPagoOrden(null)}
           onPagar={(metodo) => handlePagar(pagoOrden, metodo)}
         />

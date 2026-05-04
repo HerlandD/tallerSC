@@ -34,6 +34,9 @@ export const auditoriaService = {
       p_entidad_id: log.entidadId ?? null,
       p_entidad_tipo: log.entidadTipo ?? null,
     }),
+
+  listar: (limit: number = 100) =>
+    supabase.rpc('listar_auditoria', { p_limit: limit }),
 };
 
 export const catalogosService = {

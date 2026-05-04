@@ -26,6 +26,11 @@ app.get("/make-server-7f295475/health", (c) => {
   return c.json({ status: "ok" });
 });
 
+// Test endpoint
+app.get("/test", (c) => {
+  return c.json({ message: "Server function is working" });
+});
+
 // POST /work-orders — creates a new work order with a server-generated OT number
 app.post("/work-orders", async (c) => {
   let body: Record<string, unknown>;
@@ -71,25 +76,26 @@ app.post("/work-orders", async (c) => {
 
 // POST /send-factura-email — envía factura por email usando Resend
 app.post("/send-factura-email", async (c) => {
-  const body = await c.req.json() as {
-    clienteEmail?: string;
-    clienteNombre?: string;
-    facturaNumero?: string;
-    total?: number;
-    subtotal?: number;
-    impuesto?: number;
-    metodoPago?: string;
-    fecha?: string;
-    ordenNumero?: string;
-  };
+  try {
+    const body = await c.req.json() as {
+      clienteEmail?: string;
+      clienteNombre?: string;
+      facturaNumero?: string;
+      total?: number;
+      subtotal?: number;
+      impuesto?: number;
+      metodoPago?: string;
+      fecha?: string;
+      ordenNumero?: string;
+    };
 
-  const { clienteEmail, clienteNombre, facturaNumero, total, subtotal, impuesto, metodoPago, fecha } = body;
+    const { clienteEmail, clienteNombre, facturaNumero, total, subtotal, impuesto, metodoPago, fecha } = body;
 
-  if (!clienteEmail || !facturaNumero) {
-    return c.json({ error: "clienteEmail y facturaNumero son requeridos" }, 422);
-  }
+    if (!clienteEmail || !facturaNumero) {
+      return c.json({ error: "clienteEmail y facturaNumero son requeridos" }, 422);
+    }
 
-  const htmlTemplate = `
+    const htmlTemplate = `
     <!DOCTYPE html>
     <html>
     <head>
@@ -172,30 +178,34 @@ app.post("/send-factura-email", async (c) => {
       </div>
     </body>
     </html>
-  `;
+    `;
 
-  const resendResponse = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${Deno.env.get("RESEND_API_KEY")}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: "TallerPro <onboarding@resend.dev>",
-      to: [clienteEmail],
-      subject: `Tu factura ${facturaNumero} está lista — TallerPro 🔧`,
-      html: htmlTemplate,
-    }),
-  });
+    const resendResponse = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${Deno.env.get("RESEND_API_KEY")}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "TallerPro <onboarding@resend.dev>",
+        to: [clienteEmail],
+        subject: `Tu factura ${facturaNumero} está lista — TallerPro 🔧`,
+        html: htmlTemplate,
+      }),
+    });
 
-  if (!resendResponse.ok) {
-    const errText = await resendResponse.text();
-    console.error("Resend error:", errText);
-    return c.json({ error: `No se pudo enviar el email: ${errText}` }, 500);
+    if (!resendResponse.ok) {
+      const errText = await resendResponse.text();
+      console.error("Resend error:", errText);
+      return c.json({ error: `No se pudo enviar el email: ${errText}` }, 500);
+    }
+
+    const resendData = await resendResponse.json() as { id?: string };
+    return c.json({ ok: true, resendId: resendData.id });
+  } catch (error) {
+    console.error("Error en send-factura-email:", error);
+    return c.json({ error: "Error interno: " + (error as Error).message }, 500);
   }
-
-  const resendData = await resendResponse.json() as { id?: string };
-  return c.json({ ok: true, resendId: resendData.id });
 });
 
 Deno.serve(app.fetch);

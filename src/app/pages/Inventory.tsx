@@ -263,7 +263,7 @@ function RepuestosPanel({
   addRepuesto: (r: Omit<Repuesto, 'id'>) => Promise<{ ok: boolean; error?: string }>;
   updateRepuesto: (id: string, r: Partial<Repuesto>) => Promise<{ ok: boolean; error?: string }>;
   deleteRepuesto: (id: string) => void;
-  registrarSalidaRepuesto: (id: string, cant: number, ordenId?: string) => boolean;
+  registrarSalidaRepuesto: (id: string, cant: number, ordenId?: string, usuarioId?: string, usuarioNombre?: string) => Promise<boolean>;
   addStockRepuesto: (id: string, cant: number, costo?: number, proveedorId?: string) => void;
 }) {
   const [search, setSearch] = useState('');
@@ -588,7 +588,7 @@ function ProveedoresPanel({ proveedores, canEdit, addProveedor, updateProveedor,
   proveedores: Proveedor[]; canEdit: boolean;
   addProveedor: (p: Omit<Proveedor, 'id'>) => Promise<{ ok: boolean; error?: string }>;
   updateProveedor: (id: string, p: Partial<Proveedor>) => Promise<{ ok: boolean; error?: string }>;
-  deleteProveedor: (id: string) => void;
+  deleteProveedor: (id: string) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);

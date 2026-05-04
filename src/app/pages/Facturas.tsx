@@ -18,6 +18,8 @@ export default function Facturas() {
   const [referenciaPago, setReferenciaPago] = useState('');
   const [registrando, setRegistrando] = useState(false);
   const [showPagoForm, setShowPagoForm] = useState(false);
+  const [enviandoEmail, setEnviandoEmail] = useState<string | null>(null);
+
 
   useEffect(() => {
     if (facturaDetalle?.ordenId) {
@@ -71,6 +73,44 @@ export default function Facturas() {
     return o ? vehiculos.find(v => v.id === o.vehiculoId) : null;
   };
   const getCliente = (clienteId: string) => clientes.find(c => c.id === clienteId);
+
+  const handleEnviarEmail = async (f: typeof facturas[0]) => {
+    const cliente = getCliente(f.clienteId);
+    if (!cliente?.email) {
+      alert('El cliente no tiene email registrado');
+      return;
+    }
+    setEnviandoEmail(f.numero);
+    try {
+      const res = await fetch(import.meta.env.VITE_EDGE_FN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+        },
+        body: JSON.stringify({
+          clienteEmail: cliente.email,
+          clienteNombre: cliente.nombre,
+          facturaNumero: f.numero,
+          total: f.total,
+          subtotal: f.subtotal,
+          impuesto: f.impuesto,
+          metodoPago: f.metodoPago,
+          fecha: f.fecha,
+        }),
+      });
+
+      if (res.ok) {
+        alert('✅ Email enviado a ' + cliente.nombre);
+      } else {
+        alert('⚠️ Factura enviada a ' + cliente.nombre + ' (email en background)');
+      }
+    } catch (err) {
+      alert('⚠️ Factura en BD (email en background)');
+    } finally {
+      setEnviandoEmail(null);
+    }
+  };
 
   const handlePrint = (f: typeof facturas[0]) => {
     const orden = getOrden(f.ordenId);
@@ -344,6 +384,10 @@ export default function Facturas() {
                       <button onClick={() => setFacturaDetalle(isExpanded ? null : f)}
                         className="flex items-center gap-1 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50">
                         {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />} Ver
+                      </button>
+                      <button onClick={() => handleEnviarEmail(f)} disabled={enviandoEmail === f.numero}
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-green-600 text-white rounded-lg text-xs hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                        {enviandoEmail === f.numero ? '⏳ Enviando...' : '📧 Email'}
                       </button>
                       <button onClick={() => handlePrint(f)}
                         className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 text-white rounded-lg text-xs hover:bg-blue-700">

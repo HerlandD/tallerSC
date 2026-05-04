@@ -419,7 +419,7 @@ export default function Appointments() {
     citas, clientes, vehiculos, catalogs,
     addCita, updateCita, deleteCita,
     confirmarCita, reprogramarCita, cancelarCita,
-    addOrden, addNotificacion, currentUser, ordenes
+    addOrden, addNotificacion, currentUser, ordenes, usuarios
   } = useApp();
 
   const isAsesor = currentUser?.rol === 'asesor';
@@ -1001,7 +1001,12 @@ export default function Appointments() {
                       onChange={e => setForm({ ...form, clienteId: e.target.value, vehiculoId: '' })}
                       className={inCls(errors.clienteId)}>
                       <option value="">Seleccionar cliente...</option>
-                      {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre} — CI: {c.ci}</option>)}
+                      {clientes.filter(c => {
+                        const u = usuarios.find(usr => usr.id === c.usuarioId);
+                        return !u || u.activo;
+                      }).map(c => (
+                        <option key={c.id} value={c.id}>{c.nombre} — CI: {c.ci}</option>
+                      ))}
                     </select>
                     {errors.clienteId && <p className="text-xs text-red-500 mt-1">{errors.clienteId}</p>}
                   </div>

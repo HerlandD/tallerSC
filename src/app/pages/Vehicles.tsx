@@ -20,7 +20,7 @@ const MARCAS = [
 ];
 
 export default function Vehicles() {
-  const { vehiculos, clientes, ordenes, addVehiculo, updateVehiculo, deleteVehiculo, currentUser } = useApp();
+  const { vehiculos, clientes, ordenes, addVehiculo, updateVehiculo, deleteVehiculo, currentUser, usuarios } = useApp();
   const [showHistorial, setShowHistorial] = useState<Vehiculo | null>(null);
   const [search, setSearch]           = useState('');
   const [modalOpen, setModalOpen]     = useState(false);
@@ -231,7 +231,10 @@ export default function Vehicles() {
                   onChange={e => setForm({ ...form, clienteId: e.target.value })}
                   className={inputCls(!!errors.clienteId)}>
                   <option value="">Seleccionar cliente...</option>
-                  {clientes.map(c => (
+                  {clientes.filter(c => {
+                    const u = usuarios.find(usr => usr.id === c.usuarioId);
+                    return !u || u.activo;
+                  }).map(c => (
                     <option key={c.id} value={c.id}>{c.nombre} — CI: {c.ci}</option>
                   ))}
                 </select>
@@ -359,7 +362,7 @@ export default function Vehicles() {
       {showHistorial && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[95vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
-            <div className="flex items-center justify-between px-8 py-4 border-b border-gray-100 bg-slate-50/50">
+            <div className="flex items-center justify-between px-8 py-4 border-b border-gray-100 bg-slate-50/50 no-print">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-slate-100 text-slate-600 rounded-xl">
                   <FileText size={20} />

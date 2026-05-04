@@ -43,15 +43,26 @@ export function useInventario(autoLoad = true) {
   const deleteRepuesto = (id: string) => setRepuestos(p => p.filter(x => x.id !== id));
 
   const registrarSalidaRepuesto = async (repuestoId: string, cantidad: number, ordenId?: string, usuarioId?: string, usuarioNombre?: string): Promise<boolean> => {
-    const rep = repuestos.find(r => r.id === repuestoId);
-    if (!rep || rep.cantidad < cantidad) return false;
-    const newCantidad = rep.cantidad - cantidad;
-
-    await inventarioService.actualizarRepuesto(repuestoId, { cantidad: newCantidad });
-    if (usuarioId) {
-      await inventarioService.registrarSalida(repuestoId, cantidad, ordenId, usuarioId, usuarioNombre);
+    // Si no tenemos ordenId o usuarioId, usamos el método anterior (o fallamos si es necesario)
+    // Pero para Órdenes de Trabajo, siempre tendremos ordenId y usuarioId
+    if (!ordenId || !usuarioId || !usuarioNombre) {
+      const rep = repuestos.find(r => r.id === repuestoId);
+      if (!rep || rep.cantidad < cantidad) return false;
+      const newCantidad = rep.cantidad - cantidad;
+      await inventarioService.actualizarRepuesto(repuestoId, { cantidad: newCantidad });
+      setRepuestos(p => p.map(r => r.id === repuestoId ? { ...r, cantidad: newCantidad } : r));
+      return true;
     }
-    setRepuestos(p => p.map(r => r.id === repuestoId ? { ...r, cantidad: newCantidad } : r));
+
+    const { data, error } = await inventarioService.registrarSalidaV3(repuestoId, cantidad, ordenId, usuarioId, usuarioNombre);
+    
+    if (error || !data?.ok) {
+      console.error('Error al registrar salida V3:', error || data?.error);
+      return false;
+    }
+
+    const newStock = data.nuevoStock;
+    setRepuestos(p => p.map(r => r.id === repuestoId ? { ...r, cantidad: newStock } : r));
     return true;
   };
 
@@ -64,7 +75,7 @@ export function useInventario(autoLoad = true) {
     for (const res of repuestosReservados) {
       const r = repuestos.find(x => x.id === res.repuestoId)!;
       const newReservada = (r.cantidadReservada || 0) + res.cantidad;
-      await inventarioService.actualizarRepuesto(r.id, { cantidad_reservada: newReservada });
+      await inventarioService.actualizarRepuesto(r.id, { cantidadReservada: newReservada });
       await inventarioService.registrarReserva(r.id, r.nombre, res.cantidad, ordenId);
     }
     setRepuestos(prev => prev.map(r => {
@@ -79,7 +90,7 @@ export function useInventario(autoLoad = true) {
       const r = repuestos.find(x => x.id === res.repuestoId);
       if (!r) continue;
       const newReservada = Math.max(0, (r.cantidadReservada || 0) - res.cantidad);
-      await inventarioService.actualizarRepuesto(r.id, { cantidad_reservada: newReservada });
+      await inventarioService.actualizarRepuesto(r.id, { cantidadReservada: newReservada });
       await inventarioService.registrarLiberacion(r.id, r.nombre, res.cantidad, ordenId);
     }
     setRepuestos(prev => prev.map(r => {

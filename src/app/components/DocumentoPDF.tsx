@@ -191,10 +191,42 @@ export default function DocumentoPDF({ tipo, orden, ordenes, cliente, vehiculo, 
 
       {/* Print styles */}
       <style>{`
+        .print-only { 
+          position: absolute;
+          left: -9999px;
+          top: -9999px;
+          opacity: 0;
+        }
         @media print {
-          body * { visibility: hidden; }
-          #print-area, #print-area * { visibility: visible; }
-          #print-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; border: none; box-shadow: none; }
+          @page { size: auto; margin: 0mm; }
+          body { 
+            visibility: hidden; 
+            background: white !important; 
+          }
+          .print-only { 
+            position: static;
+            left: auto;
+            top: auto;
+            opacity: 1;
+            display: block !important; 
+          }
+          #print-area, #print-area * { 
+            visibility: visible; 
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          #print-area { 
+            position: absolute; 
+            left: 0; 
+            top: 0; 
+            width: 100%; 
+            margin: 0; 
+            padding: 20mm;
+            max-width: none !important;
+            border: none !important; 
+            box-shadow: none !important; 
+          }
+          .no-print { display: none !important; }
         }
       `}</style>
     </div>

@@ -134,7 +134,7 @@ function StepProgress({ estadoActual }: { estadoActual: EstadoOrden }) {
 // ─── Wizard: Nueva OT (3 pasos) ──────────────────────────────────────────────
 
 function WizardNuevaOT({ onClose }: { onClose: () => void }) {
-  const { clientes, vehiculos, catalogs, addCliente, addVehiculo, addOrden, addAuditoria, currentUser } = useApp();
+  const { clientes, vehiculos, catalogs, addCliente, addVehiculo, addOrden, addAuditoria, currentUser, usuarios } = useApp();
 
   const [paso, setPaso] = useState(1);
 
@@ -154,10 +154,13 @@ function WizardNuevaOT({ onClose }: { onClose: () => void }) {
   const [descripcion, setDescripcion] = useState('');
   const [citaId, setCitaId] = useState('');
 
-  const clienteFiltrado = clientes.filter(c =>
-    !clienteSearch || c.nombre.toLowerCase().includes(clienteSearch.toLowerCase()) ||
-    c.ci.includes(clienteSearch) || c.telefono?.includes(clienteSearch)
-  ).slice(0, 8);
+  const clienteFiltrado = clientes.filter(c => {
+    const user = usuarios.find(u => u.id === c.usuarioId);
+    const isActivo = !user || user.activo;
+    if (!isActivo) return false;
+    return !clienteSearch || c.nombre.toLowerCase().includes(clienteSearch.toLowerCase()) ||
+    c.ci.includes(clienteSearch) || (c.telefono || '').includes(clienteSearch);
+  }).slice(0, 8);
 
   const clienteSeleccionado = clientes.find(c => c.id === clienteId);
   const vehiculosCliente = vehiculos.filter(v => v.clienteId === clienteId);
@@ -1208,10 +1211,18 @@ function ModalDetalle({ orden, onClose, currentUser }: {
           {localOrden.estado === 'esperando_aprobacion' && isCliente && (
             <PanelAprobacion
               orden={localOrden} totalCot={totalCot}
-              onAprobar={() => {
+              onAprobar={async () => {
                 if (localOrden.repuestosReservados?.length) {
-                  localOrden.repuestosReservados.forEach(r => registrarSalidaRepuesto(r.repuestoId, r.cantidad, localOrden.id));
-                  liberarReservas(localOrden.repuestosReservados, localOrden.id);
+                  const toastId = toast.loading('Procesando repuestos...');
+                  try {
+                    for (const r of localOrden.repuestosReservados) {
+                      await registrarSalidaRepuesto(r.repuestoId, r.cantidad, localOrden.id, currentUser?.id, currentUser?.nombre);
+                    }
+                    await liberarReservas(localOrden.repuestosReservados, localOrden.id);
+                    toast.success('Repuestos procesados correctamente', { id: toastId });
+                  } catch (err) {
+                    toast.error('Error al procesar repuestos', { id: toastId });
+                  }
                 }
                 update({ cotizacion: { ...localOrden.cotizacion!, estado: 'aprobada', fechaRespuesta: new Date().toISOString().split('T')[0] }, estado: 'en_reparacion' });
                 log('APROBAR_COTIZACION', `Cliente aprobó cotización. OT → EN_REPARACION`);
@@ -1267,7 +1278,8 @@ function ModalDetalle({ orden, onClose, currentUser }: {
               onPagar={(metodoPago) => {
                 const costoDx = localOrden.cotizacion?.costoDiagnostico || 30;
                 const factura = generarFactura(costoDx, metodoPago);
-                addFactura(factura);
+                const clienteRecord = clientes.find(c => c.id === localOrden.clienteId);
+                addFactura(factura, clienteRecord?.email, clienteRecord?.nombre);
                 update({ estado: 'finalizada', entregaFirmada: true, facturaId: factura.numero });
                 log('LIQUIDACION_PAGADA', `Diagnóstico cobrado $${costoDx}. Factura ${factura.numero}. OT FINALIZADA.`);
                 toast.success(`Pago de diagnóstico registrado. Factura ${factura.numero} generada.`);
@@ -1281,6 +1293,7 @@ function ModalDetalle({ orden, onClose, currentUser }: {
             <PanelReparacion
               orden={localOrden} repuestos={repuestos}
               registrarSalidaRepuesto={registrarSalidaRepuesto}
+              currentUser={currentUser}
               onGuardar={(reparacion, repuestosUsados, fotosReparacion) => {
                 update({ reparacion, repuestosUsados, fotosReparacion });
                 log('GUARDAR_REPARACION', 'Reparación actualizada');
@@ -1338,7 +1351,8 @@ function ModalDetalle({ orden, onClose, currentUser }: {
                 // Only generate new invoice if client didn't pay online
                 if (!localOrden.pagadoEnLinea) {
                   const factura = generarFactura(totalCot, metodoPago);
-                  addFactura(factura);
+                  const clienteRecord = clientes.find(c => c.id === localOrden.clienteId);
+                  addFactura(factura, clienteRecord?.email, clienteRecord?.nombre);
                   facturaId = factura.numero;
                 }
                 update({
@@ -1377,11 +1391,11 @@ function ModalDetalle({ orden, onClose, currentUser }: {
               totalCot={totalCot} catalogs={catalogs}
               onPagar={(metodoPago) => {
                 const factura = generarFactura(totalCot, metodoPago);
-                addFactura(factura);
+                const clienteRecord = clientes.find(c => c.id === localOrden.clienteId);
+                addFactura(factura, clienteRecord?.email, clienteRecord?.nombre);
                 // OT stays in 'liberada' — asesor must confirm physical delivery
                 update({ pagadoEnLinea: true, facturaId: factura.numero, metodoPagoFinal: metodoPago, cotizacion: { ...localOrden.cotizacion!, metodoPago } });
                 // Notify asesor: client already paid
-                const clienteRecord = clientes.find(c => c.id === localOrden.clienteId);
                 addNotificacion({
                   tipo: 'pago_recibido',
                   titulo: `💳 Pago recibido en línea — ${localOrden.numero}`,
@@ -2032,10 +2046,11 @@ function PanelLiquidacion({ orden, catalogs, onPagar }: {
 
 // ─── Panel: Reparación (Mecánico) ─────────────────────────────────────────────
 
-function PanelReparacion({ orden, repuestos, registrarSalidaRepuesto, onGuardar, onEnviarQC }: {
+function PanelReparacion({ orden, repuestos, registrarSalidaRepuesto, currentUser, onGuardar, onEnviarQC }: {
   orden: OrdenTrabajo;
   repuestos: ReturnType<typeof useApp>['repuestos'];
   registrarSalidaRepuesto: ReturnType<typeof useApp>['registrarSalidaRepuesto'];
+  currentUser: ReturnType<typeof useApp>['currentUser'];
   onGuardar: (r: string, ru: RepuestoUsado[], fotos: string[]) => void;
   onEnviarQC: (r: string, ru: RepuestoUsado[], fotos: string[]) => void;
 }) {
@@ -2049,19 +2064,26 @@ function PanelReparacion({ orden, repuestos, registrarSalidaRepuesto, onGuardar,
   // QC rejection observations visible to mechanic
   const qcRechazado = orden.controlCalidad && !orden.controlCalidad.aprobado && orden.controlCalidad.observaciones;
 
-  const handleAddRep = () => {
+  const handleAddRep = async () => {
     const rep = repuestos.find(r => r.id === addRepId);
     if (!rep) return;
     if (addRepCant > rep.cantidad) { toast.error(`Stock insuficiente: ${rep.cantidad} disponibles`); return; }
-    const ok = registrarSalidaRepuesto(addRepId, addRepCant, orden.id);
-    if (!ok) { toast.error('Error al registrar salida'); return; }
+    
+    const toastId = toast.loading(`Registrando ${rep.nombre}...`);
+    const ok = await registrarSalidaRepuesto(addRepId, addRepCant, orden.id, currentUser?.id, currentUser?.nombre);
+    
+    if (!ok) { 
+      toast.error('Error al registrar salida', { id: toastId }); 
+      return; 
+    }
+    
     setRepuestosUsados(prev => {
       const ex = prev.find(r => r.repuestoId === addRepId);
       return ex ? prev.map(r => r.repuestoId === addRepId ? { ...r, cantidad: r.cantidad + addRepCant } : r)
         : [...prev, { repuestoId: addRepId, nombre: rep.nombre, cantidad: addRepCant, precio: rep.precio }];
     });
     setAddRepId(''); setAddRepCant(1);
-    toast.success(`${rep.nombre} registrado`);
+    toast.success(`${rep.nombre} registrado`, { id: toastId });
   };
 
   return (

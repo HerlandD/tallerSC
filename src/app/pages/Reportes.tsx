@@ -19,7 +19,7 @@ type Periodo = 'hoy' | 'semana' | 'mes' | 'trimestre' | 'año';
 
 export default function Reportes() {
   const { ordenes, clientes, vehiculos, repuestos, usuarios, kardex, auditoria, currentUser,
-    generarReporteIngresos, generarReporteProductividad, generarReporteValorInventario } = useApp();
+    generarReporteIngresos, generarReporteProductividad, generarReporteValorInventario, cargarAuditoria } = useApp();
 
   const [activeTab, setActiveTab] = useState<ReportTab>('finanzas');
   const [periodo, setPeriodo] = useState<Periodo>('mes');
@@ -80,6 +80,12 @@ export default function Reportes() {
   useEffect(() => {
     cargarReportes();
   }, [fechaInicio, fechaFin]);
+  
+  useEffect(() => {
+    if (activeTab === 'auditoria') {
+      cargarAuditoria();
+    }
+  }, [activeTab]);
 
   if (currentUser?.rol !== 'administrador') {
     return (
@@ -396,7 +402,7 @@ export default function Reportes() {
                 <p className="font-semibold text-amber-800">Repuestos con Stock Bajo ({stockBajo.length})</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {stockBajo.map(r => (
+                {stockBajo.map((r: any) => (
                   <div key={r.id} className="bg-white border border-amber-200 rounded-lg p-3 flex justify-between items-center">
                     <div>
                       <p className="text-sm font-medium text-gray-800">{r.nombre}</p>

@@ -11,7 +11,8 @@ import { useNotificaciones, useAuditoria, useCatalogs } from '../../hooks/useTra
 import { supabase } from '../../lib/supabase';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-export type { WorkOrderNote, WorkOrderAttachment, WorkOrderQC, Pago } from '../../lib/supabase';
+import type { WorkOrderNote, WorkOrderAttachment, WorkOrderQC, Pago } from '../../lib/supabase';
+export type { WorkOrderNote, WorkOrderAttachment, WorkOrderQC, Pago };
 
 export type Rol = 'administrador' | 'asesor' | 'mecanico' | 'jefe_taller' | 'cliente';
 
@@ -191,14 +192,14 @@ const initialCatalogs = {
 
 interface AppContextType {
   // Auth
-  currentUser: any;
+  currentUser: Usuario | null;
   login: (username: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => void;
   registerCliente: (datos: any) => Promise<{ ok: boolean; error?: string }>;
 
   // Usuarios
-  usuarios: any[];
-  personal: any[];
+  usuarios: Usuario[];
+  personal: PersonalTaller[];
   addUsuario: (u: any) => Promise<{ ok: boolean; error?: string }>;
   updateUsuario: (id: string, u: any) => Promise<{ ok: boolean; error?: string }>;
   deleteUsuario: (id: string) => void;
@@ -207,8 +208,8 @@ interface AppContextType {
   deletePersonal: (id: string) => Promise<void>;
 
   // Clientes
-  clientes: any[];
-  vehiculos: any[];
+  clientes: Cliente[];
+  vehiculos: Vehiculo[];
   addCliente: (c: any) => Promise<{ ok: boolean; error?: string }>;
   updateCliente: (id: string, c: any) => Promise<{ ok: boolean; error?: string }>;
   deleteCliente: (id: string) => Promise<{ ok: boolean; error?: string }>;
@@ -217,7 +218,7 @@ interface AppContextType {
   deleteVehiculo: (id: string) => Promise<{ ok: boolean; error?: string }>;
 
   // Citas
-  citas: any[];
+  citas: Cita[];
   addCita: (c: any, creadoPor?: string) => Promise<{ ok: boolean; error?: string }>;
   updateCita: (id: string, c: any) => Promise<{ ok: boolean; error?: string }>;
   deleteCita: (id: string) => Promise<{ ok: boolean; error?: string }>;
@@ -227,11 +228,11 @@ interface AppContextType {
   updateCitaEstado: (id: string, nuevoEstado: any, motivo?: string) => Promise<{ ok: boolean; error?: string }>;
 
   // Órdenes
-  ordenes: any[];
-  notasOT: Record<string, any[]>;
-  adjuntosOT: Record<string, any[]>;
-  qcOT: Record<string, any>;
-  pagosOT: Record<string, any[]>;
+  ordenes: OrdenTrabajo[];
+  notasOT: Record<string, WorkOrderNote[]>;
+  adjuntosOT: Record<string, WorkOrderAttachment[]>;
+  qcOT: Record<string, WorkOrderQC | null>;
+  pagosOT: Record<string, Pago[]>;
   addOrden: (o: any) => Promise<void>;
   updateOrden: (id: string, o: any) => Promise<void>;
   deleteOrden: (id: string) => void;
@@ -250,13 +251,13 @@ interface AppContextType {
   asignarMecanico: (ordenId: string, mecanicoId: string) => Promise<{ ok: boolean; error?: string }>;
 
   // Inventario
-  repuestos: any[];
-  kardex: any[];
-  proveedores: any[];
+  repuestos: Repuesto[];
+  kardex: MovimientoKardex[];
+  proveedores: Proveedor[];
   addRepuesto: (r: any) => Promise<{ ok: boolean; error?: string }>;
-  updateRepuesto: (id: string, r: any) => void;
+  updateRepuesto: (id: string, r: any) => Promise<{ ok: boolean; error?: string }>;
   deleteRepuesto: (id: string) => void;
-  registrarSalidaRepuesto: (repuestoId: string, cantidad: number, ordenId?: string) => Promise<boolean>;
+  registrarSalidaRepuesto: (repuestoId: string, cantidad: number, ordenId?: string, usuarioId?: string, usuarioNombre?: string) => Promise<boolean>;
   reservarRepuestos: (repuestosReservados: any[], ordenId: string) => Promise<boolean>;
   liberarReservas: (repuestosReservados: any[], ordenId: string) => Promise<void>;
   addStockRepuesto: (repuestoId: string, cantidad: number, costo?: number, proveedorId?: string) => void;
@@ -267,9 +268,9 @@ interface AppContextType {
   deleteProveedor: (id: string) => Promise<{ ok: boolean; error?: string }>;
 
   // Pagos
-  facturas: any[];
-  facturasOT: Record<string, any[]>;
-  addFactura: (f: any) => Promise<void>;
+  facturas: Factura[];
+  facturasOT: Record<string, Factura[]>;
+  addFactura: (f: Factura, clienteEmail?: string, clienteNombre?: string) => Promise<void>;
   updateFactura: (numero: string, f: any) => Promise<void>;
   registrarPago: (ordenId: string, metodo: any, monto: number, referencia?: string) => Promise<{ ok: boolean; confirmado?: boolean; error?: string }>;
   confirmarPago: (pagoId: string) => Promise<{ ok: boolean; error?: string }>;
@@ -281,17 +282,18 @@ interface AppContextType {
   obtenerFacturaPorOrden: (ordenId: string) => Promise<{ ok?: boolean; id?: string; numero?: string; urlPdf?: string; subtotal?: number; iva?: number; total?: number; error?: string }>;
 
   // Notificaciones
-  notificaciones: any[];
+  notificaciones: Notificacion[];
   addNotificacion: (n: any) => Promise<void>;
   marcarNotificacionLeida: (id: string) => Promise<void>;
   marcarTodasLeidas: () => Promise<void>;
 
   // Auditoría
-  auditoria: any[];
+  auditoria: LogAuditoria[];
   addAuditoria: (log: any) => Promise<void>;
+  cargarAuditoria: () => Promise<void>;
 
   // Catálogos
-  catalogs: any;
+  catalogs: Catalogs;
   updateCatalogs: (c: any) => void;
 
   // Reportes
@@ -430,6 +432,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Auditoría
     auditoria: auditoria.auditoria,
     addAuditoria: auditoria.addAuditoria,
+    cargarAuditoria: auditoria.cargarAuditoria,
 
     // Catálogos
     catalogs: catalogs.catalogs,

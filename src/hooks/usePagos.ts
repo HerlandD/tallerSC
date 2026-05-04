@@ -47,9 +47,34 @@ export function usePagos(autoLoad = true) {
     if (Array.isArray(data)) setFacturasOT(prev => ({ ...prev, [ordenId]: data }));
   };
 
-  const addFactura = async (f: Factura) => {
+  const addFactura = async (f: Factura, clienteEmail?: string, clienteNombre?: string) => {
     const { error } = await pagosService.crearFactura(f);
-    if (!error) setFacturas(prev => [...prev, f]);
+    if (!error) {
+      setFacturas(prev => [...prev, f]);
+
+      // Intentar enviar email en background (sin bloquear)
+      if (clienteEmail && f.numero) {
+        setTimeout(() => {
+          fetch(import.meta.env.VITE_EDGE_FN_URL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+            },
+            body: JSON.stringify({
+              clienteEmail,
+              clienteNombre: clienteNombre || 'Cliente',
+              facturaNumero: f.numero,
+              total: f.total,
+              subtotal: f.subtotal,
+              impuesto: f.impuesto,
+              metodoPago: f.metodoPago,
+              fecha: f.fecha,
+            }),
+          }).catch(err => console.warn('Email no enviado:', err));
+        }, 500);
+      }
+    }
   };
 
   const updateFactura = async (numero: string, f: Partial<Factura>) => {

@@ -244,7 +244,23 @@ function UsuariosTab() {
   });
 
   const openCreate = () => { setEditId(null); setForm(emptyUsuario); setErrors({}); setShowPass(false); setModalOpen(true); };
-  const openEdit = (u: Usuario) => { setEditId(u.id); setForm({ nombre: u.nombre, username: u.username, password: u.password, rol: u.rol, activo: u.activo, ci: u.ci, telefono: u.telefono, email: u.email, direccion: u.direccion }); setErrors({}); setShowPass(false); setModalOpen(true); };
+  const openEdit = (u: Usuario) => { 
+    setEditId(u.id); 
+    setForm({ 
+      nombre: u.nombre, 
+      username: u.username, 
+      password: '', // Don't load the current password (hash) to prevent accidental overwriting
+      rol: u.rol, 
+      activo: u.activo, 
+      ci: u.ci, 
+      telefono: u.telefono, 
+      email: u.email, 
+      direccion: u.direccion 
+    }); 
+    setErrors({}); 
+    setShowPass(false); 
+    setModalOpen(true); 
+  };
 
   const validate = () => {
     const e: Partial<Record<keyof UsuarioForm, string>> = {};
@@ -268,7 +284,11 @@ function UsuariosTab() {
     if (!validate()) return;
     setSaving(true);
     if (editId) {
-      const r = await updateUsuario(editId, form);
+      // Only send the password if the user typed something
+      const payload = { ...form };
+      if (!payload.password) delete (payload as any).password;
+      
+      const r = await updateUsuario(editId, payload);
       setSaving(false);
       if (r.ok) { toast.success('Usuario actualizado'); setModalOpen(false); }
       else toast.error(r.error ?? 'Error al actualizar');
