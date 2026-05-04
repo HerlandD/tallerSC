@@ -260,7 +260,7 @@ interface AppContextType {
   registrarSalidaRepuesto: (repuestoId: string, cantidad: number, ordenId?: string, usuarioId?: string, usuarioNombre?: string) => Promise<boolean>;
   reservarRepuestos: (repuestosReservados: any[], ordenId: string) => Promise<boolean>;
   liberarReservas: (repuestosReservados: any[], ordenId: string) => Promise<void>;
-  addStockRepuesto: (repuestoId: string, cantidad: number, costo?: number, proveedorId?: string) => void;
+  addStockRepuesto: (repuestoId: string, cantidad: number, costo?: number, proveedorId?: string, usuarioId?: string, usuarioNombre?: string) => Promise<void>;
   obtenerAlertasInventario: () => Promise<any[]>;
   addKardex: (m: any) => void;
   addProveedor: (p: any) => Promise<{ ok: boolean; error?: string }>;

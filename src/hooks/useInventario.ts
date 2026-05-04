@@ -99,11 +99,28 @@ export function useInventario(autoLoad = true) {
     }));
   };
 
-  const addStockRepuesto = (repuestoId: string, cantidad: number, costo?: number, proveedorId?: string) => {
+  const addStockRepuesto = async (repuestoId: string, cantidad: number, costo?: number, proveedorId?: string, usuarioId?: string, usuarioNombre?: string) => {
     const rep = repuestos.find(r => r.id === repuestoId);
     if (!rep) return;
-    const newCantidad = rep.cantidad + cantidad;
-    setRepuestos(p => p.map(r => r.id === repuestoId ? { ...r, cantidad: newCantidad } : r));
+
+    const { data, error } = await inventarioService.registrarEntradaV3(
+      repuestoId,
+      cantidad,
+      usuarioId,
+      usuarioNombre,
+      costo,
+      proveedorId
+    );
+
+    if (error || !data?.ok) {
+      console.error('Error al registrar entrada:', error || data?.error);
+      return;
+    }
+
+    const newStock = data.nuevoStock;
+    setRepuestos(p => p.map(r => r.id === repuestoId ? { ...r, cantidad: newStock, costo: costo ?? r.costo, proveedorId: proveedorId ?? r.proveedorId } : r));
+    
+    // El kardex se cargará de la DB en la siguiente actualización o se puede añadir localmente si se desea
     const prov = proveedores.find(p => p.id === proveedorId);
     setKardex(prev => [...prev, {
       id: `k${Date.now()}`,
@@ -111,13 +128,13 @@ export function useInventario(autoLoad = true) {
       repuestoNombre: rep.nombre,
       tipo: 'entrada',
       cantidad,
-      stockResultante: newCantidad,
+      stockResultante: newStock,
       fecha: new Date().toISOString(),
-      usuarioId: 'sistema',
-      usuarioNombre: 'Sistema',
+      usuarioId: usuarioId ?? 'sistema',
+      usuarioNombre: usuarioNombre ?? 'Sistema',
       proveedorId,
       costo,
-      observaciones: prov ? `Entrada de ${prov.nombre}` : 'Entrada de stock',
+      observaciones: prov ? `Entrada de ${prov.nombre}` : 'Entrada manual de stock',
     }]);
   };
 

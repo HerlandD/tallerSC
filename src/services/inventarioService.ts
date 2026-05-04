@@ -93,6 +93,17 @@ export const inventarioService = {
       p_observaciones: 'Entrada de stock',
     }),
 
+  registrarEntradaV3: (repuestoId: string, cantidad: number, usuarioId?: string, usuarioNombre?: string, costo?: number, proveedorId?: string) =>
+    supabase.rpc('registrar_entrada_repuesto_v3', {
+      p_repuesto_id: repuestoId,
+      p_cantidad: cantidad,
+      p_usuario_id: usuarioId ?? null,
+      p_usuario_nombre: usuarioNombre ?? 'Sistema',
+      p_costo: costo ?? null,
+      p_proveedor_id: proveedorId || null,
+      p_observaciones: 'Entrada manual de stock',
+    }),
+
   obtenerAlertas: () =>
     supabase.rpc('obtener_alertas_inventario'),
 

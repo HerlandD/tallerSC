@@ -121,6 +121,7 @@ export default function Inventory() {
             canEdit={isAdmin} addRepuesto={addRepuesto} updateRepuesto={updateRepuesto}
             deleteRepuesto={deleteRepuesto} registrarSalidaRepuesto={registrarSalidaRepuesto}
             addStockRepuesto={addStockRepuesto} showProveedorInfo={isAdmin}
+            currentUser={currentUser}
           />
         )}
         {activeTab === 'alertas' && isAdmin && (
@@ -256,7 +257,8 @@ function MecanicoInventarioView({ repuestos, addNotificacion, currentUser }: {
 // ─── RepuestosPanel (Admin/Asesor) ────────────────────────────────────────────
 function RepuestosPanel({
   repuestos, proveedores, stockBajo, canEdit, showProveedorInfo,
-  addRepuesto, updateRepuesto, deleteRepuesto, registrarSalidaRepuesto, addStockRepuesto
+  addRepuesto, updateRepuesto, deleteRepuesto, registrarSalidaRepuesto, addStockRepuesto,
+  currentUser
 }: {
   repuestos: Repuesto[]; proveedores: Proveedor[]; stockBajo: Repuesto[];
   canEdit: boolean; showProveedorInfo: boolean;
@@ -264,7 +266,8 @@ function RepuestosPanel({
   updateRepuesto: (id: string, r: Partial<Repuesto>) => Promise<{ ok: boolean; error?: string }>;
   deleteRepuesto: (id: string) => void;
   registrarSalidaRepuesto: (id: string, cant: number, ordenId?: string, usuarioId?: string, usuarioNombre?: string) => Promise<boolean>;
-  addStockRepuesto: (id: string, cant: number, costo?: number, proveedorId?: string) => void;
+  addStockRepuesto: (id: string, cant: number, costo?: number, proveedorId?: string, usuarioId?: string, usuarioNombre?: string) => Promise<void>;
+  currentUser: any;
 }) {
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('');
@@ -301,9 +304,16 @@ function RepuestosPanel({
     setModalOpen(false);
   };
 
-  const handleEntrada = () => {
+  const handleEntrada = async () => {
     if (!entradaModal) return;
-    addStockRepuesto(entradaModal.id, entradaCant, entradaCosto || undefined, entradaProveedor || undefined);
+    await addStockRepuesto(
+      entradaModal.id, 
+      entradaCant, 
+      entradaCosto || undefined, 
+      entradaProveedor || undefined,
+      currentUser?.id,
+      currentUser?.nombre
+    );
     toast.success(`+${entradaCant} unidades agregadas a ${entradaModal.nombre}`);
     setEntradaModal(null); setEntradaCant(1); setEntradaCosto(0); setEntradaProveedor('');
   };
